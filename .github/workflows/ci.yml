@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  sql:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      PGOPTIONS: -c client_min_messages=warning
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install psql
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Migrations from scratch
+        run: scripts/db-reset.sh
+      - name: SQL acceptance tests
+        run: scripts/test-sql.sh
