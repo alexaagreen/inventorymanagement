@@ -1,4 +1,4 @@
-// inventory-ledger v0.4.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Woo → ledger: webhook-verifisering (HMAC), ordre/refusjon inn i inv.apply_woo_order /
 // inv.apply_woo_refund, og backfill av ordrer fra Woo REST.

@@ -1,4 +1,4 @@
-// inventory-ledger v0.4.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Klient-helper for UI (kun fetch — trygg i React, ingen server-importer).
 //   const { data, next_cursor } = await inv('/movements?sku=KNIV-1&type=sale');

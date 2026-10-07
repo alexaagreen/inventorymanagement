@@ -1,4 +1,4 @@
-// inventory-ledger v0.4.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Ledger → Woo: push av tilgjengelig beholdning (outbox-worker), reconcile, og
 // Woo → ledger: synk av varer (produkter/variasjoner → inv.item).
@@ -148,9 +148,11 @@ async function fetchWooCatalog() {
  */
 export async function syncItems({ source = 'auto' } = {}) {
   if (source !== 'woo') {
-    const [{ has }] = await sql(`select to_regprocedure('inv.upsert_items_from_catalog()') is not null as has`);
+    // Adapteren (0090) leser nettbutikkens speil i samme database — bruk den når speilet finnes.
+    const [{ has }] = await sql(`select to_regprocedure('inv.upsert_items_from_catalog()') is not null
+                                        and to_regclass('public.products') is not null as has`);
     if (has) return { source: 'catalog_adapter', ...(await rpc('upsert_items_from_catalog', [])) };
-    if (source === 'catalog') return { source: 'catalog_adapter', error: 'inv.upsert_items_from_catalog() is not installed' };
+    if (source === 'catalog') return { source: 'catalog_adapter', error: 'storefront mirror (public.products) not found in the inventory database' };
   }
   if (!wooConfigured()) throw new WooError(0, 'No catalog adapter and WooCommerce is not configured');
   const catalog = await fetchWooCatalog();

@@ -8,9 +8,12 @@ on:
 jobs:
   sql:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pg: ['15', '17']   # Supabase-prosjektene kjører 15 (Skarpekniver) og 17 (Bark)
     services:
       postgres:
-        image: postgres:15
+        image: postgres:${{ matrix.pg }}
         env:
           POSTGRES_PASSWORD: postgres
         ports: ['5432:5432']
@@ -24,6 +27,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install psql
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Install script smoke test
+        run: |
+          mkdir -p /tmp/inst/web /tmp/inst/shop/supabase/migrations && echo '{}' > /tmp/inst/web/package.json
+          node scripts/install.mjs --api /tmp/inst/web --migrations /tmp/inst/shop/supabase/migrations
+          node scripts/install.mjs --api /tmp/inst/web --migrations /tmp/inst/shop/supabase/migrations --check
       - name: Migrations from scratch
         run: scripts/db-reset.sh
       - name: SQL acceptance tests
@@ -33,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:15
+        image: postgres:17
         env:
           POSTGRES_PASSWORD: postgres
         ports: ['5432:5432']

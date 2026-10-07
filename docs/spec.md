@@ -4,7 +4,7 @@
 >
 > Erstatter rollen Cin7/DEAR har i dag for Skarpekniver (lagermaster, PO, varemottak, stock adjustment, movements). Produktmaster er WooCommerce.
 
-Status: **spec klar for implementering**. Dato: 2026-10-07. Eier: Alexander.
+Status: **v0.5.0 implementert** (fase 1–4 + installasjon). Endringer etter v0.4.0 er merket «v0.5». Dato: 2026-10-07. Eier: Alexander.
 
 ---
 
@@ -12,7 +12,7 @@ Status: **spec klar for implementering**. Dato: 2026-10-07. Eier: Alexander.
 
 | Spørsmål | Beslutning |
 |---|---|
-| Pakking | Schema `inv` + Postgres-funksjoner som SQL-migrasjoner i **hver butikks egen Supabase**. HTTP-ruter som kopierbar pakke (Pages Router, samme mønster som `internal-web` og `bark-internal-web`). Ingen multi-tenant; `tenant_id` finnes ikke. |
+| Pakking | Schema `inv` + Postgres-funksjoner som SQL-migrasjoner i **samme Supabase som butikkens nettbutikk** (besluttet 2026-10-07; migrasjonene ligger i nettbutikk-repoet, API/UI i internal-web). HTTP-ruter som kopierbar pakke (Pages Router, samme mønster som `internal-web` og `bark-internal-web`). Ingen multi-tenant; `tenant_id` finnes ikke. |
 | Kildekode | **Eget repo `inventory-ledger` er master.** All endring går via PR dit først; butikk-repoene puller versjonerte kopier inn (install-script + lock-fil) og redigerer aldri de kopierte filene lokalt. Se §11.2. |
 | Lokasjoner | Flere lokasjoner støttes fra dag én (lager, butikk, …), men installasjonen seeder én default-lokasjon (`MAIN`) og alle API-kall kan utelate `location` — da brukes default. En butikk med én lokasjon skal aldri trenge å forholde seg til begrepet. |
 | Lagermaster | **Ledgeren er master for beholdning.** Etter hver bevegelse pushes tilgjengelig antall til Woo `stock_quantity` (som Cin7 gjør i dag). |
@@ -548,6 +548,11 @@ Daglig: hent alle Woo-produkter/variasjoner med `manage_stock`, sammenlign `stoc
 ---
 
 ## 8. Installasjon per butikk
+
+> **v0.5:** `inv` bor alltid i nettbutikkens Supabase. `node scripts/install.mjs --api <internal-web> --migrations <nettbutikk>/supabase/migrations`.
+> Migrasjonene går inn via nettbutikk-repoet (`supabase db push`), internal-web kobler til med `INVENTORY_DATABASE_URL`.
+> Katalog-adapteren (`0090`) leser nettbutikkens speil (`public.products`/`product_variations`) og er felles for alle butikker
+> med samme speil. `0006` fjerner all tilgang for `anon`/`authenticated`. Åpningsbalanse: `POST /opening-balance` (CSV-rader).
 
 1. Kjør migrasjonene i butikkens Supabase (`supabase db push` eller `psql`): `0001_inv_schema.sql` (typer, tabeller, indekser, triggere, seed `MAIN` + settings), `0002_inv_functions.sql`, `0003_inv_views.sql`, `0004_inv_woo.sql`, `0090_catalog_adapter_<butikk>.sql`.
 2. Sett `inv.settings` (valuta, PO-prefix) og `select setval('inv.po_number_seq', <siste Cin7-nummer>)` for Skarpekniver, så PO-nummereringen fortsetter.

@@ -1,4 +1,4 @@
-// inventory-ledger v0.4.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Lesespørringer for liste-endepunktene. Ingen forretningslogikk — kun filtre,
 // sortering og keyset-paginering over viewene i schema `inv`.
@@ -35,16 +35,27 @@ const MOVEMENT_KIND_TYPES = {
 // ── Varer ──────────────────────────────────────────────────────────────────
 export async function listItems({ q, active, track_stock, limit, cursor }) {
   const w = new Where();
-  if (q) w.add('(sku ilike ? or name ilike ?)', `%${q}%`, `%${q}%`);
-  if (active != null) w.add('active = ?', active);
-  if (track_stock != null) w.add('track_stock = ?', track_stock);
+  if (q) w.add('(i.sku ilike ? or i.name ilike ?)', `%${q}%`, `%${q}%`);
+  if (active != null) w.add('i.active = ?', active);
+  if (track_stock != null) w.add('i.track_stock = ?', track_stock);
   const c = decodeCursor(cursor);
-  if (c) w.add('upper(sku) > ?', c.sku);
+  if (c) w.add('upper(i.sku) > ?', c.sku);
+  // Treff der SKU starter med søket først (SKU-velgeren)
+  const rank = q ? `case when upper(i.sku) = upper(${w.param(q)}) then 0 when i.sku ilike ${w.param(`${q}%`)} then 1 else 2 end,` : '';
   const rows = await sql(
-    `select id, sku, name, woo_product_id, woo_variation_id, track_stock, active,
-            reorder_point, reorder_qty, attributes, synced_at
-       from inv.item ${w.sql} order by upper(sku) limit ${limit + 1}`, w.params);
+    `select i.id, i.sku, i.name, i.woo_product_id, i.woo_variation_id, i.track_stock, i.active,
+            i.reorder_point, i.reorder_qty, i.attributes, i.synced_at,
+            s.on_hand, s.available, s.avg_cost, s.last_purchase_cost
+       from inv.item i join inv.v_item_status s on s.item_id = i.id
+       ${w.sql} order by ${c ? '' : rank} upper(i.sku) limit ${limit + 1}`, w.params);
   return page(rows, limit, (r) => ({ sku: r.sku.toUpperCase() }));
+}
+
+export async function webhookLog({ limit = 50, result }) {
+  const w = new Where();
+  if (result) w.add('result = ?', result);
+  return sql(`select id, topic, resource_id, received_at, result, message
+                from inv.woo_webhook_log ${w.sql} order by id desc limit ${Math.min(limit, 500)}`, w.params);
 }
 
 // ── Beholdning ─────────────────────────────────────────────────────────────
