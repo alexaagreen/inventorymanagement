@@ -1,0 +1,23 @@
+{
+  "name": "inventory-ledger-api",
+  "version": "0.3.0",
+  "private": true,
+  "description": "HTTP layer for inventory-ledger — copied into each shop's internal-web by scripts/install.mjs",
+  "scripts": {
+    "dev": "next dev -p 3100",
+    "build": "next build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "next": "^14.2.35",
+    "pg": "^8.13.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

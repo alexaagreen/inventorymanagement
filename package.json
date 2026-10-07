@@ -1,12 +1,13 @@
 {
   "name": "inventory-ledger",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "FIFO inventory ledger (schema inv + HTTP API) for WooCommerce shops",
   "scripts": {
     "db:reset": "scripts/db-reset.sh",
     "test:sql": "scripts/test-sql.sh",
-    "test": "scripts/test-sql.sh"
+    "test:api": "cd api && npm test",
+    "test": "scripts/test-sql.sh && cd api && npm test"
   },
   "engines": {
     "node": ">=18.0.0"
