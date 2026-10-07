@@ -36,7 +36,10 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `tests/sql/` | akseptansetester (spec §10), én fil per scenario, `_helpers.sql` |
 | `scripts/db-reset.sh` | dropper `inv` og kjører alle migrasjoner (nekter mot remote Supabase) |
 | `scripts/test-sql.sh` | kjører alle SQL-tester, fersk DB per fil |
-| `api/` | HTTP-laget (fase 3+) |
+| `migrations/0005_inv_api.sql` | `idempotency_key`, `list_locations` |
+| `api/lib/inventory/` | HTTP-laget: `db` (egen pool), `rpc` (inv.* → jsonb, feilmapping), `handler` (route-wrapper: auth, 405, Idempotency-Key, feil), `queries` (lister/keyset), `auth`, `errors` (kode→status + norsk brukertekst), `csv`, `client` (fetch-helper for UI), `config` (**butikk-spesifikk, overskrives ikke**) |
+| `api/pages/api/inventory/**` | rutene i spec §6.1–6.5 |
+| `api/tests/` | vitest mot ekte Postgres — kaller handlerne direkte med mock req/res |
 | `docs/spec.md` | spesifikasjonen |
 
 ## Kjøre lokalt
@@ -46,7 +49,17 @@ og snakker bare HTTP mot `/api/inventory/*`.
 supabase start            # DB på postgres://postgres:postgres@localhost:54322/postgres
 export DATABASE_URL=postgres://postgres:postgres@localhost:54322/postgres
 npm run test:sql          # = scripts/test-sql.sh
+cd api && npm ci && npm test && npm run build
 ```
+
+## API-konvensjoner
+
+- Hver rute er `export default route({ GET, POST, … })` fra `lib/inventory/handler.js`. Handler
+  returnerer body (GET → 200, POST → 201) eller `withStatus(code, body)`. Ingen forretningslogikk i
+  rutene — skrivinger går til `rpc('<inv-funksjon>', …)`, lesinger til `queries.js`.
+- `ctx.by` settes fra session (e-post) eller API-nøkkel (`x-inventory-by`/`body.by`, ellers `api-key`).
+- Lister: `{ data, next_cursor }`, `limit` ≤ 500, `format=csv` gir hele utvalget som CSV (`;`, BOM).
+- Avhengigheter i butikken: kun `pg` (allerede i begge internal-webs). Ingen zod.
 
 ## Konvensjoner i SQL
 
