@@ -1,4 +1,4 @@
-// inventory-ledger v0.4.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Feilkoder → HTTP-status (spec §6.0) og norsk brukertekst for UI.
 // Isomorf: ingen server-importer, trygg i React.
@@ -54,35 +54,48 @@ export function fromPgError(err) {
   return new InventoryError('INTERNAL', err?.message || 'Internal error', {}, 500);
 }
 
-/** Brukertekst (norsk) for en feil fra API-et. `err` er { code, message, details }. */
-export function userMessage(err) {
+const TEXT = {
+  no: {
+    INSUFFICIENT_STOCK: (d) => d.on_hand != null
+      ? `Ikke nok på lager (${Number(d.on_hand)} på ${d.location || 'lokasjonen'}, prøvde å ta ${Number(d.requested)})`
+      : 'Ikke nok på lager',
+    COST_REQUIRED: (d) => `Varen ${d.sku || ''} har ingen kosthistorikk — oppgi enhetskost`.replace('  ', ' '),
+    OVER_RECEIPT: (d) => `Mer enn bestilt: ${d.sku || ''} bestilt ${Number(d.qty_ordered)}, mottatt ${Number(d.qty_received)}`,
+    LAYER_CONSUMED: () => 'Varene fra denne bevegelsen er allerede solgt eller flyttet — lag en justering i stedet',
+    ALREADY_REVERSED: () => 'Dette er allerede reversert',
+    PO_LOCKED: () => 'Innkjøpsordren er låst for endringer',
+    PO_STATUS_INVALID: () => 'Ugyldig statusendring for innkjøpsordren',
+    ITEM_NOT_FOUND: (d) => `Fant ikke varen ${d.sku || ''}`.trim(),
+    LOCATION_NOT_FOUND: (d) => `Fant ikke lokasjonen ${d.location || ''}`.trim(),
+    UNAUTHORIZED: () => 'Du er ikke logget inn',
+    fallback: 'Noe gikk galt',
+  },
+  en: {
+    INSUFFICIENT_STOCK: (d) => d.on_hand != null
+      ? `Not enough stock (${Number(d.on_hand)} on ${d.location || 'location'}, tried to take ${Number(d.requested)})`
+      : 'Not enough stock',
+    COST_REQUIRED: (d) => `${d.sku || 'This item'} has no cost history — enter a unit cost`,
+    OVER_RECEIPT: (d) => `More than ordered: ${d.sku || ''} ordered ${Number(d.qty_ordered)}, already received ${Number(d.qty_received)}`,
+    LAYER_CONSUMED: () => 'Stock from this movement has already been sold or moved — make an adjustment instead',
+    ALREADY_REVERSED: () => 'This has already been reversed',
+    PO_LOCKED: () => 'This purchase order is locked for changes',
+    PO_STATUS_INVALID: () => 'That status change is not allowed for this purchase order',
+    ITEM_NOT_FOUND: (d) => `Item ${d.sku || ''} not found`.replace('  ', ' '),
+    LOCATION_NOT_FOUND: (d) => `Location ${d.location || ''} not found`.replace('  ', ' '),
+    UNAUTHORIZED: () => 'You are not signed in',
+    fallback: 'Something went wrong',
+  },
+};
+
+/**
+ * Brukertekst for en feil fra API-et. `err` er { code, message, details }.
+ * lang: 'no' (default) eller 'en'.
+ */
+export function userMessage(err, lang = 'no') {
+  const t = TEXT[lang] || TEXT.no;
   const d = err?.details || {};
-  switch (err?.code) {
-    case 'INSUFFICIENT_STOCK':
-      return d.on_hand != null
-        ? `Ikke nok på lager (${Number(d.on_hand)} på ${d.location || 'lokasjonen'}, prøvde å ta ${Number(d.requested)})`
-        : 'Ikke nok på lager';
-    case 'COST_REQUIRED':
-      return `Varen ${d.sku || ''} har ingen kosthistorikk — oppgi enhetskost`.trim();
-    case 'OVER_RECEIPT':
-      return `Mer enn bestilt: ${d.sku || ''} bestilt ${Number(d.qty_ordered)}, mottatt ${Number(d.qty_received)}`;
-    case 'LAYER_CONSUMED':
-      return 'Varene fra denne bevegelsen er allerede solgt eller flyttet — lag en justering i stedet';
-    case 'ALREADY_REVERSED':
-      return 'Dette er allerede reversert';
-    case 'PO_LOCKED':
-      return 'Innkjøpsordren er låst for endringer';
-    case 'PO_STATUS_INVALID':
-      return 'Ugyldig statusendring for innkjøpsordren';
-    case 'ITEM_NOT_FOUND':
-      return `Fant ikke varen ${d.sku || ''}`.trim();
-    case 'LOCATION_NOT_FOUND':
-      return `Fant ikke lokasjonen ${d.location || ''}`.trim();
-    case 'UNAUTHORIZED':
-      return 'Du er ikke logget inn';
-    case 'VALIDATION':
-      return err.message || 'Ugyldig input';
-    default:
-      return err?.message || 'Noe gikk galt';
-  }
+  const f = t[err?.code];
+  if (f) return f(d);
+  if (err?.code === 'VALIDATION') return err.message || (lang === 'en' ? 'Invalid input' : 'Ugyldig input');
+  return err?.message || t.fallback;
 }

@@ -4,7 +4,7 @@
 >
 > Erstatter rollen Cin7/DEAR har i dag for Skarpekniver (lagermaster, PO, varemottak, stock adjustment, movements). Produktmaster er WooCommerce.
 
-Status: **spec klar for implementering**. Dato: 2026-10-07. Eier: Alexander.
+Status: **v0.5.0 implementert** (fase 1–4 + installasjon). Endringer etter v0.4.0 er merket «v0.5». Dato: 2026-10-07. Eier: Alexander.
 
 ---
 
@@ -12,7 +12,7 @@ Status: **spec klar for implementering**. Dato: 2026-10-07. Eier: Alexander.
 
 | Spørsmål | Beslutning |
 |---|---|
-| Pakking | Schema `inv` + Postgres-funksjoner som SQL-migrasjoner i **hver butikks egen Supabase**. HTTP-ruter som kopierbar pakke (Pages Router, samme mønster som `internal-web` og `bark-internal-web`). Ingen multi-tenant; `tenant_id` finnes ikke. |
+| Pakking | Schema `inv` + Postgres-funksjoner som SQL-migrasjoner i **samme Supabase som butikkens nettbutikk** (besluttet 2026-10-07; migrasjonene ligger i nettbutikk-repoet, API/UI i internal-web). HTTP-ruter som kopierbar pakke (Pages Router, samme mønster som `internal-web` og `bark-internal-web`). Ingen multi-tenant; `tenant_id` finnes ikke. |
 | Kildekode | **Eget repo `inventory-ledger` er master.** All endring går via PR dit først; butikk-repoene puller versjonerte kopier inn (install-script + lock-fil) og redigerer aldri de kopierte filene lokalt. Se §11.2. |
 | Lokasjoner | Flere lokasjoner støttes fra dag én (lager, butikk, …), men installasjonen seeder én default-lokasjon (`MAIN`) og alle API-kall kan utelate `location` — da brukes default. En butikk med én lokasjon skal aldri trenge å forholde seg til begrepet. |
 | Lagermaster | **Ledgeren er master for beholdning.** Etter hver bevegelse pushes tilgjengelig antall til Woo `stock_quantity` (som Cin7 gjør i dag). |
@@ -549,6 +549,11 @@ Daglig: hent alle Woo-produkter/variasjoner med `manage_stock`, sammenlign `stoc
 
 ## 8. Installasjon per butikk
 
+> **v0.5:** `inv` bor alltid i nettbutikkens Supabase. `node scripts/install.mjs --api <internal-web> --migrations <nettbutikk>/supabase/migrations`.
+> Migrasjonene går inn via nettbutikk-repoet (`supabase db push`), internal-web kobler til med `INVENTORY_DATABASE_URL`.
+> Katalog-adapteren (`0090`) leser nettbutikkens speil (`public.products`/`product_variations`) og er felles for alle butikker
+> med samme speil. `0006` fjerner all tilgang for `anon`/`authenticated`. Åpningsbalanse: `POST /opening-balance` (CSV-rader).
+
 1. Kjør migrasjonene i butikkens Supabase (`supabase db push` eller `psql`): `0001_inv_schema.sql` (typer, tabeller, indekser, triggere, seed `MAIN` + settings), `0002_inv_functions.sql`, `0003_inv_views.sql`, `0004_inv_woo.sql`, `0090_catalog_adapter_<butikk>.sql`.
 2. Sett `inv.settings` (valuta, PO-prefix) og `select setval('inv.po_number_seq', <siste Cin7-nummer>)` for Skarpekniver, så PO-nummereringen fortsetter.
 3. Opprett ekstra lokasjoner ved behov (`insert into inv.location …`). For Skarpekniver: `MAIN` (Hovedlager) + `BUTIKK` (Vulkan, `sellable_online=false` hvis butikkens varer ikke skal selges på nett — avklares).
@@ -700,7 +705,7 @@ Fase 1–4 er modul-repoet alene og kan bygges uten tilgang til butikkene. Fase 
 
 **Skarpekniver `internal-web`** (RetoolDB som `DATABASE_URL`): ledgeren bor i v3 sin Supabase (der produktspeilet allerede ligger). Derfor en **egen pool** i `lib/inventory/db.js` på `INVENTORY_DATABASE_URL` (Supabase transaction pooler, 6543, `sslmode=require`, `max: 5`). Alt under `/api/inventory/*` bruker den poolen; ingen cross-DB-joins. Der UI-et i dag joiner `products.current_stock` fra RetoolDB, hentes status i stedet fra `GET /api/inventory/stock?skus=…` (batch, maks 500 SKU-er per kall) og merges klientside — eller via en daglig cron som speiler `inv.v_item_status` inn i RetoolDB-`products` (`current_stock`, `average_cost`) så eksisterende views (`v_product_sales`, forecast, prismonitor) fortsetter å virke uten endring. **Anbefalt: gjør begge** — speilet dekker rapporter, live-kallet dekker drift-sidene.
 
-**`bark-internal-web`** (Supabase er allerede `DATABASE_URL`): `lib/inventory/db.js` gjenbruker `lib/db.js`-poolen når `INVENTORY_DATABASE_URL` ikke er satt. Ingen ekstra infrastruktur.
+**`bark-internal-web`**: `inv` bor i barkavenue-Supabase (storefronten), ikke i internal-web sin egen database. `INVENTORY_DATABASE_URL` er derfor påkrevd også her — `lib/inventory/db.js` har **ingen** fallback til `DATABASE_URL` (fra v0.5.0), så en manglende variabel feiler høyt i stedet for å skrive lageret til feil database.
 
 **Auth-wiring:** `lib/inventory/auth.js > requireInventoryAuth(req, res)` godtar `Authorization: Bearer $INVENTORY_API_KEY` eller NextAuth-session, og returnerer `{ by }` (e-post fra session, eller `api-key:<label>`) som alle skrivende ruter putter i `by`. I internal-web delegeres til eksisterende `requireSecretOrSession` med `INVENTORY_API_KEY` som ekstra godkjent secret; i Bark til `assertCronAuth`-mønsteret + `getServerSession`. Webhook-rutene bruker HMAC i stedet og allowlistes i `middleware.js`.
 

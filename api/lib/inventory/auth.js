@@ -1,4 +1,4 @@
-// inventory-ledger v0.4.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // requireInventoryAuth(req, res) → { by, via } eller null (og 401 er sendt).
 // Godtar:

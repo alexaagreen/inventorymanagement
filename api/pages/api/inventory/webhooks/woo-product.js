@@ -1,4 +1,4 @@
-// inventory-ledger v0.4.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { readRawBody, verifyWooSignature, isWooPing } from '../../../../lib/inventory/woo-order';
 import { upsertWooProduct, deactivateWooProduct } from '../../../../lib/inventory/woo-push';
 import { rpc } from '../../../../lib/inventory/rpc';

@@ -1,6 +1,6 @@
 {
   "name": "inventory-ledger-api",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "HTTP layer for inventory-ledger — copied into each shop's internal-web by scripts/install.mjs",
   "scripts": {

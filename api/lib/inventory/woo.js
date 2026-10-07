@@ -1,4 +1,4 @@
-// inventory-ledger v0.4.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Minimal WooCommerce REST-klient for ledgeren. Leser alt fra env — aldri hardkodede
 // URL-er eller nøkler (se butikkenes CLAUDE.md):

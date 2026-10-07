@@ -19,6 +19,16 @@ den før du endrer noe. Denne fila er inngangen og reglene.
 5. Agenter som jobber i et butikk-repo og trenger en endring her: stopp og si fra,
    eller åpne PR her. Ikke patch kopien.
 
+## Hvor ting bor i en butikk (besluttet 2026-10-07)
+
+- **`inv`-schemaet bor ALLTID i samme Supabase som nettbutikken** (storefront-speilet). Migrasjonene
+  installeres i nettbutikk-repoets `supabase/migrations/` og kjøres med nettbutikkens migrasjonsflyt.
+- **API + UI bor i butikkens internal-web**, som kobler til nettbutikkens database med `INVENTORY_DATABASE_URL`.
+- Installasjon: `node scripts/install.mjs --api <internal-web> --migrations <nettbutikk>/supabase/migrations`.
+  `--check` i butikkens CI feiler hvis kopierte filer er endret lokalt. Leverte migrasjoner er
+  uforanderlige — endringer = ny migrasjon her.
+- `0006_inv_grants.sql` sørger for at nettbutikkens offentlige anon-nøkkel aldri når `inv`.
+
 ## Arkitektur i én setning
 
 All forretningslogikk bor i Postgres (schema `inv`): tabeller, FIFO-funksjoner,
@@ -37,6 +47,11 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `scripts/db-reset.sh` | dropper `inv` og kjører alle migrasjoner (nekter mot remote Supabase) |
 | `scripts/test-sql.sh` | kjører alle SQL-tester, fersk DB per fil |
 | `migrations/0005_inv_api.sql` | `idempotency_key`, `list_locations` |
+| `migrations/0006_inv_grants.sql` | revoke alt for PUBLIC/anon/authenticated (inv er server-only) |
+| `migrations/0007_inv_opening_balance.sql` | `import_opening_balance` (dry run, alt-eller-ingenting, idempotent per SKU×lokasjon) |
+| `migrations/0090_inv_catalog_adapter_storefront.sql` | `upsert_items_from_catalog()` fra nettbutikkens speil (felles for alle butikker) |
+| `scripts/install.mjs` | installerer i butikk: `--api`, `--migrations`, `--check`, `--dry-run`, `--force` |
+| `api/lib/inventory/config.example.js` | mal for butikkens `config.js` (NextAuth `getToken` / `getServerSession`) |
 | `api/lib/inventory/` | HTTP-laget: `db` (egen pool), `rpc` (inv.* → jsonb, feilmapping), `handler` (route-wrapper: auth, 405, Idempotency-Key, feil), `queries` (lister/keyset), `auth`, `errors` (kode→status + norsk brukertekst), `csv`, `client` (fetch-helper for UI), `config` (**butikk-spesifikk, overskrives ikke**) |
 | `api/lib/inventory/woo*.js` | `woo` (REST-klient, env-styrt, retry), `woo-push` (push-worker, `kickPush`, reconcile, item-sync), `woo-order` (HMAC-webhook, ordre+refusjon, backfill) |
 | `api/pages/api/inventory/**` | rutene i spec §6.1–6.6 (inkl. `webhooks/*`, `sync/*`, `items/sync`) |

@@ -15,7 +15,9 @@ FIFO-varelager (inventory ledger) for WooCommerce-butikker, bygget som et Postgr
 | 2 | Woo-kjerne i SQL: ordre/refund, push-kø | ✅ |
 | 3 | API-lag (`api/`) | ✅ |
 | 4 | Woo-integrasjon: webhook, push-worker, reconcile | ✅ |
-| 5–7 | Installasjon Skarpekniver, UI, Bark | ⏳ |
+| 5 | v0.5: install-script, katalog-adapter (nettbutikk-speil), grants, åpningsbalanse | ✅ |
+| 6 | Bark: installasjon + UI i bark-internal-web | 🚧 |
+| 7 | Skarpekniver | ⏳ |
 
 ## Kom i gang
 
