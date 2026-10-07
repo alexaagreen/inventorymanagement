@@ -1,4 +1,4 @@
-// inventory-ledger v0.3.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.4.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Feilkoder → HTTP-status (spec §6.0) og norsk brukertekst for UI.
 // Isomorf: ingen server-importer, trygg i React.

@@ -38,7 +38,9 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `scripts/test-sql.sh` | kjører alle SQL-tester, fersk DB per fil |
 | `migrations/0005_inv_api.sql` | `idempotency_key`, `list_locations` |
 | `api/lib/inventory/` | HTTP-laget: `db` (egen pool), `rpc` (inv.* → jsonb, feilmapping), `handler` (route-wrapper: auth, 405, Idempotency-Key, feil), `queries` (lister/keyset), `auth`, `errors` (kode→status + norsk brukertekst), `csv`, `client` (fetch-helper for UI), `config` (**butikk-spesifikk, overskrives ikke**) |
-| `api/pages/api/inventory/**` | rutene i spec §6.1–6.5 |
+| `api/lib/inventory/woo*.js` | `woo` (REST-klient, env-styrt, retry), `woo-push` (push-worker, `kickPush`, reconcile, item-sync), `woo-order` (HMAC-webhook, ordre+refusjon, backfill) |
+| `api/pages/api/inventory/**` | rutene i spec §6.1–6.6 (inkl. `webhooks/*`, `sync/*`, `items/sync`) |
+| `scripts/backfill-woo-orders.mjs` | backfill via API, følger `next_page` |
 | `api/tests/` | vitest mot ekte Postgres — kaller handlerne direkte med mock req/res |
 | `docs/spec.md` | spesifikasjonen |
 
@@ -59,6 +61,12 @@ cd api && npm ci && npm test && npm run build
   rutene — skrivinger går til `rpc('<inv-funksjon>', …)`, lesinger til `queries.js`.
 - `ctx.by` settes fra session (e-post) eller API-nøkkel (`x-inventory-by`/`body.by`, ellers `api-key`).
 - Lister: `{ data, next_cursor }`, `limit` ≤ 500, `format=csv` gir hele utvalget som CSV (`;`, BOM).
+- Etter vellykket skriv kaller `route()` `kickPush()` (fire-and-forget). Cron `sync/push-stock` hvert minutt er
+  garantien. `INVENTORY_KICK_PUSH=off` slår av kick (tester).
+- Webhook-rutene bruker ikke `route()` (rå body for HMAC, `bodyParser: false`) og må allowlistes i
+  butikkens `middleware.js`. Fail-closed uten `WC_WEBHOOK_SECRET`.
+- Env: `INVENTORY_DATABASE_URL`, `INVENTORY_API_KEY` (kommaseparert liste tillatt), `WC_WEBHOOK_SECRET`,
+  `WOOCOMMERCE_STORE_URL`, `WOOCOMMERCE_CONSUMER_KEY`, `WOOCOMMERCE_CONSUMER_SECRET`.
 - Avhengigheter i butikken: kun `pg` (allerede i begge internal-webs). Ingen zod.
 
 ## Konvensjoner i SQL

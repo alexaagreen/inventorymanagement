@@ -1,4 +1,4 @@
-// inventory-ledger v0.3.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.4.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // route({ GET, POST, … }) — felles wrapper for alle /api/inventory/*-ruter:
 //   * metode-dispatch (405 med Allow-header)
@@ -9,6 +9,7 @@
 import { authenticate } from './auth';
 import { InventoryError, fromPgError } from './errors';
 import { sql } from './rpc';
+import { kickPush } from './woo-push';
 
 const WRITE = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
 
@@ -25,7 +26,7 @@ function parseBody(req) {
   return b;
 }
 
-export function route(methods, { auth = true } = {}) {
+export function route(methods, { auth = true, noPush = false } = {}) {
   return async function handler(req, res) {
     const fn = methods[req.method];
     if (!fn) {
@@ -60,7 +61,10 @@ export function route(methods, { auth = true } = {}) {
           [String(idemKey), req.method, String(req.url || ''), status, JSON.stringify(payload ?? null)],
         ).catch(() => {});
       }
-      return res.status(status).json(payload ?? null);
+      res.status(status).json(payload ?? null);
+      // Skriv ferdig → be push-workeren oppdatere Woo nå (cron er garantien).
+      if (WRITE.has(req.method) && status < 300 && !noPush) kickPush();
+      return undefined;
     } catch (e) {
       const err = fromPgError(e);
       if (err.status >= 500) console.error('[inventory]', req.method, req.url, e);
