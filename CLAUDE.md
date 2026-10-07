@@ -32,6 +32,7 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `migrations/0001_inv_schema.sql` | typer, tabeller, indekser, triggere (immutabel ledger), seed |
 | `migrations/0002_inv_functions.sql` | FIFO-kjernen (`_post_in`/`_post_out`), dokumenter, reversering, vedlikehold |
 | `migrations/0003_inv_views.sql` | `v_item_status`, `v_stock_by_location`, `v_movement`, `v_open_consumption` |
+| `migrations/0004_inv_woo.sql` | Woo-tilstandsmaskin (`apply_woo_order`/`apply_woo_refund`), push-kø, webhook-logg, `upsert_items` |
 | `tests/sql/` | akseptansetester (spec §10), én fil per scenario, `_helpers.sql` |
 | `scripts/db-reset.sh` | dropper `inv` og kjører alle migrasjoner (nekter mot remote Supabase) |
 | `scripts/test-sql.sh` | kjører alle SQL-tester, fersk DB per fil |
@@ -61,10 +62,20 @@ npm run test:sql          # = scripts/test-sql.sh
   skrevet i samme setning. Skriv først (`v_id := ...`), returner JSON i neste setning.
 - Migrasjoner er idempotente der det er praktisk og har header `-- inventory-ledger vX.Y.Z`.
 
+## Woo-ordre i ledgeren (kort)
+
+`inv.woo_order_sync.lines` holder per ordrelinje `ordered` (sist sett antall), `net` (netto trukket),
+`refunded` og `seq`. Mål ved trekk-status: `net = ordered − refunded`. Første salg har
+`ref_line = <line_id>`, påfølgende `<line_id>:<seq>`, returer `<line_id>:r<seq>`, refusjoner
+`ref_type='woo_refund', ref_id=<refund_id>`. Restore-status returnerer `net`. Push-køen fylles av
+trigger på `inv.movement`; workeren claimer rader i 2 min (`list_stock_push_due`).
+
 ## Avvik fra spec (bevisste)
 
 - `adjustment_line.revalue_out_movement_id` — ekstra kolonne for revaluering (to bevegelser per linje).
 - `cost_layer.source_layer_id` — sporbarhet ved overføring/reversering.
 - `inv.preview_adjustment(p)` — kjører `create_adjustment` i en subtransaksjon som rulles tilbake.
 - `restore_statuses` inkluderer `failed`.
+- `stock_push_queue.claimed_until` i stedet for `SKIP LOCKED` over HTTP-kall (claim holder på tvers av transaksjoner).
+- Ukjent `inv_location` i ordre-meta faller tilbake til default-lokasjon i stedet for å feile.
 - PO-nummer har 5 siffer (`PO-00001`); sett `inv.po_number_seq` ved installasjon.
