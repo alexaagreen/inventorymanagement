@@ -1,4 +1,4 @@
-// inventory-ledger v0.3.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.4.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Kall en inv.*-funksjon og få jsonb tilbake. Feil fra inv._raise() blir InventoryError.
 //   await rpc('create_adjustment', body)

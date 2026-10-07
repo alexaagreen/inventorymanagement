@@ -1,4 +1,4 @@
-// inventory-ledger v0.3.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.4.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, qList } from '../../../../lib/inventory/handler';
 import { onOrder } from '../../../../lib/inventory/queries';
 
