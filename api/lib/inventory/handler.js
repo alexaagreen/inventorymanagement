@@ -1,11 +1,11 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// route({ GET, POST, … }) — felles wrapper for alle /api/inventory/*-ruter:
-//   * metode-dispatch (405 med Allow-header)
-//   * auth (Bearer INVENTORY_API_KEY eller session) → ctx.by
-//   * Idempotency-Key på skrivende kall (24 t, lagret i inv.idempotency_key)
-//   * feilmapping: InventoryError / pg-feil → { error: { code, message, details } }
-// Handler returnerer body (200 for GET, 201 for POST) eller withStatus(code, body).
+// route({ GET, POST, … }) — shared wrapper for every /api/inventory/* route:
+//   * method dispatch (405 with an Allow header)
+//   * auth (Bearer INVENTORY_API_KEY or session) → ctx.by
+//   * Idempotency-Key on writes (24 h, stored in inv.idempotency_key)
+//   * error mapping: InventoryError / pg error → { error: { code, message, details } }
+// The handler returns a body (200 for GET, 201 for POST) or withStatus(code, body).
 import { authenticate } from './auth';
 import { InventoryError, fromPgError } from './errors';
 import { sql } from './rpc';
@@ -62,7 +62,7 @@ export function route(methods, { auth = true, noPush = false } = {}) {
         ).catch(() => {});
       }
       res.status(status).json(payload ?? null);
-      // Skriv ferdig → be push-workeren oppdatere Woo nå (cron er garantien).
+      // Write finished → ask the push worker to update Woo now (cron is the guarantee).
       if (WRITE.has(req.method) && status < 300 && !noPush) kickPush();
       return undefined;
     } catch (e) {
@@ -74,7 +74,7 @@ export function route(methods, { auth = true, noPush = false } = {}) {
   };
 }
 
-// ── Query-hjelpere ─────────────────────────────────────────────────────────
+// ── Query helpers ──────────────────────────────────────────────────────────
 
 export function qList(v) {
   if (v == null || v === '') return null;

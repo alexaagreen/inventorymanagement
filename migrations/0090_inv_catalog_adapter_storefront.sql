@@ -1,15 +1,18 @@
--- inventory-ledger v0.5.0
+-- inventory-ledger v0.6.0
 -- =============================================================================
--- 0090_inv_catalog_adapter_storefront.sql — varer fra nettbutikkens Supabase-speil
+-- 0090_inv_catalog_adapter_storefront.sql — items from the storefront Supabase mirror
 -- =============================================================================
--- `inv` bor alltid i samme Supabase som nettbutikken (skarpekniverv3 / barkavenue).
--- Begge har samme speil: public.products (+ public.product_variations) med
--- source_payload = full Woo-respons. Adapteren gjør speilet til inv.item:
---   * simple-produkter → én vare;  variable → én vare per variasjon (parent hoppes over)
---   * track_stock = Woo manage_stock === true (variasjon med 'parent' → false)
---   * active      = publisert/privat (og variasjonen ikke er draft/private-skjult)
---   * varer som er borte fra speilet deaktiveres (deactivate_missing)
--- Funksjonen valideres først ved kjøring, så migrasjonen tåler at speilet mangler.
+-- `inv` always lives in the same Supabase as the storefront (skarpekniverv3 / barkavenue).
+-- Both have the same mirror: public.products (+ public.product_variations) with
+-- source_payload = the full Woo response. The adapter turns the mirror into inv.item:
+--   * simple products → one item; variable → one item per variation (the parent is skipped)
+--   * track_stock = Woo manage_stock === true (a variation with 'parent' → false)
+-- v0.6.0 replaces this function in 0091_inv_v060.sql (mode, excluded roots, bundles).
+-- This body stays so a database that already applied 0090 still has the function
+-- until 0091 runs. Fresh installs end on the 0091 definition.
+--   * active      = published/private (and the variation is not draft/hidden)
+--   * items gone from the mirror are deactivated (deactivate_missing)
+-- The function is validated at execution time, so the migration tolerates a missing mirror.
 -- =============================================================================
 
 create or replace function inv.upsert_items_from_catalog() returns jsonb

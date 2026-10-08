@@ -1,11 +1,11 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, requireUuid } from '../../../../../lib/inventory/handler';
 import { getDoc } from '../../../../../lib/inventory/queries';
 import { rpc } from '../../../../../lib/inventory/rpc';
 import { InventoryError } from '../../../../../lib/inventory/errors';
 
 // GET   /api/inventory/purchase-orders/:id
-// PATCH /api/inventory/purchase-orders/:id  { header-felter?, lines? }
+// PATCH /api/inventory/purchase-orders/:id  { header fields?, lines? }
 export default route({
   GET: async (req, res, { query }) => {
     const po = await getDoc('po', requireUuid(query.id));

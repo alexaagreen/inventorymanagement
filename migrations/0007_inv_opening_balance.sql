@@ -1,12 +1,12 @@
--- inventory-ledger v0.5.0
+-- inventory-ledger v0.6.0
 -- =============================================================================
--- 0007_inv_opening_balance.sql — åpningsbalanse (spec §8 pkt 7)
+-- 0007_inv_opening_balance.sql — opening balance (spec §8 item 7)
 -- =============================================================================
--- inv.import_opening_balance(p) med p = { rows: [{ sku, location?, qty, unit_cost }], by?, occurred_at?, dry_run? }
---   * Validerer ALLE rader først. Finnes én feil, skrives ingenting (alt-eller-ingenting).
---   * dry_run=true: returnerer forhåndsvisning (vare, lokasjon, verdi, om den alt er importert).
---   * Idempotent per (sku × lokasjon): ref_type='opening_balance', ref_id='<SKU>:<LOC>'.
---     En rad som alt er importert hoppes over (existing) — endringer gjøres med justering.
+-- inv.import_opening_balance(p) with p = { rows: [{ sku, location?, qty, unit_cost }], by?, occurred_at?, dry_run? }
+--   * Validates EVERY row first. One error writes nothing (all or nothing).
+--   * dry_run=true: returns a preview (item, location, value, whether it was already imported).
+--   * Idempotent per (sku × location): ref_type='opening_balance', ref_id='<SKU>:<LOC>'.
+--     A row that was already imported is skipped (existing) — changes are made with an adjustment.
 -- =============================================================================
 
 create or replace function inv.import_opening_balance(p jsonb) returns jsonb
@@ -66,7 +66,7 @@ begin
     if (r->>'existing')::boolean then v_existing := v_existing + 1; continue; end if;
     perform inv._post_in((r->>'item_id')::uuid, (r->>'location_id')::uuid, 'opening_balance',
       jsonb_build_array(jsonb_build_object('qty', (r->>'qty')::numeric, 'unit_cost', (r->>'unit_cost')::numeric, 'received_at', v_at)),
-      'manual', 'opening_balance', r->>'ref', null, 'Åpningsbalanse', null, inv._jtext(p, 'by'), v_at, null);
+      'manual', 'opening_balance', r->>'ref', null, 'Opening balance', null, inv._jtext(p, 'by'), v_at, null);
     v_imported := v_imported + 1;
     v_value := v_value + (r->>'value')::numeric;
   end loop;

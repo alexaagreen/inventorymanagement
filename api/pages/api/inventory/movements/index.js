@@ -1,4 +1,4 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, qBool, qLimit, qList, qDate, isCsv, requireParam } from '../../../../lib/inventory/handler';
 import { listMovements } from '../../../../lib/inventory/queries';
 import { rpc } from '../../../../lib/inventory/rpc';
@@ -6,7 +6,7 @@ import { sendCsv } from '../../../../lib/inventory/csv';
 
 // GET  /api/inventory/movements?sku=&skus=&type=sale,purchase_receipt&kind=salg&location=
 //        &ref_type=&ref_id=&from=&to=&by=&q=&include_reversed=0&limit=&cursor=&count=1&format=csv
-// POST /api/inventory/movements   { sku, type, qty, unit_cost?, location?, ref_type?, ref_id?, … }  (rå)
+// POST /api/inventory/movements   { sku, type, qty, unit_cost?, location?, ref_type?, ref_id?, … }  (raw)
 export default route({
   GET: async (req, res, { query }) => {
     const csv = isCsv(query);

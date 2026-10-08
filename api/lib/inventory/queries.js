@@ -1,7 +1,7 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// Lesespørringer for liste-endepunktene. Ingen forretningslogikk — kun filtre,
-// sortering og keyset-paginering over viewene i schema `inv`.
+// Read queries for the list endpoints. No business logic — only filters,
+// sorting and keyset pagination over the views in schema `inv`.
 import { sql } from './rpc';
 import { encodeCursor, decodeCursor } from './handler';
 import { InventoryError } from './errors';
@@ -32,7 +32,7 @@ const MOVEMENT_KIND_TYPES = {
   reversering: ['reversal'],
 };
 
-// ── Varer ──────────────────────────────────────────────────────────────────
+// ── Items ──────────────────────────────────────────────────────────────────
 export async function listItems({ q, active, track_stock, limit, cursor }) {
   const w = new Where();
   if (q) w.add('(i.sku ilike ? or i.name ilike ?)', `%${q}%`, `%${q}%`);
@@ -40,7 +40,7 @@ export async function listItems({ q, active, track_stock, limit, cursor }) {
   if (track_stock != null) w.add('i.track_stock = ?', track_stock);
   const c = decodeCursor(cursor);
   if (c) w.add('upper(i.sku) > ?', c.sku);
-  // Treff der SKU starter med søket først (SKU-velgeren)
+  // Rows whose SKU starts with the query rank first (the SKU picker)
   const rank = q ? `case when upper(i.sku) = upper(${w.param(q)}) then 0 when i.sku ilike ${w.param(`${q}%`)} then 1 else 2 end,` : '';
   const rows = await sql(
     `select i.id, i.sku, i.name, i.woo_product_id, i.woo_variation_id, i.track_stock, i.active,
@@ -58,7 +58,7 @@ export async function webhookLog({ limit = 50, result }) {
                 from inv.woo_webhook_log ${w.sql} order by id desc limit ${Math.min(limit, 500)}`, w.params);
 }
 
-// ── Beholdning ─────────────────────────────────────────────────────────────
+// ── Stock ──────────────────────────────────────────────────────────────────
 export async function listStock({ skus, location, negative, below_reorder, q, active, limit, cursor, all }) {
   const w = new Where();
   const c = decodeCursor(cursor);
@@ -101,7 +101,7 @@ export async function valuation({ location }) {
   return { total_value: Math.round(total * 100) / 100, location: location || null, rows };
 }
 
-// ── Bevegelser ─────────────────────────────────────────────────────────────
+// ── Movements ──────────────────────────────────────────────────────────────
 export async function listMovements(f) {
   const w = new Where();
   if (f.skus) w.add('upper(sku) = any(?)', f.skus.map((s) => s.toUpperCase()));
@@ -170,14 +170,14 @@ export async function cogsReport({ from, to, group_by, location }) {
   return {
     from: from || null, to: to || null, group_by: group_by || 'sku',
     total_cogs: Math.round(total * 100) / 100,
-    // Korreksjoner bokført i perioden (estimert → faktisk kost). Allerede inkludert
-    // i cogs for salg i perioden; vises separat for periodeavslutning.
+    // Corrections booked in the period (estimated → actual cost). Already included
+    // in COGS for sales in the period; shown separately for period close.
     corrections_booked_in_period: Number(corr.delta),
     rows,
   };
 }
 
-// ── Dokumenter ─────────────────────────────────────────────────────────────
+// ── Documents ──────────────────────────────────────────────────────────────
 function docPage(rows, limit) {
   return page(rows, limit, (r) => ({ t: r.created_at, id: r.id }));
 }

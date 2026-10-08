@@ -1,15 +1,15 @@
--- inventory-ledger v0.1.0
+-- inventory-ledger v0.6.0
 -- =============================================================================
--- 0001_inv_schema.sql — schema `inv`: typer, tabeller, indekser, triggere, seed
+-- 0001_inv_schema.sql — schema `inv`: types, tables, indexes, triggers, seed
 -- =============================================================================
--- Kilde: docs/spec.md §2. Idempotent der det er praktisk (IF NOT EXISTS).
--- Ikke rediger i butikk-repoer — endre i inventory-ledger og re-installer.
+-- Source: docs/spec.md §2. Idempotent where that is practical (IF NOT EXISTS).
+-- Do not edit in shop repos — change it in inventory-ledger and re-install.
 -- =============================================================================
 
 create schema if not exists inv;
 
 -- ---------------------------------------------------------------------------
--- Typer
+-- Types
 -- ---------------------------------------------------------------------------
 do $$ begin
   create type inv.movement_type as enum (
@@ -57,7 +57,7 @@ insert into inv.settings (key, value) values
   ('schema_version',       '0.1.0')
 on conflict (key) do nothing;
 
--- Dokument-nummersekvenser
+-- Document number sequences
 create sequence if not exists inv.po_number_seq;
 create sequence if not exists inv.gr_number_seq;
 create sequence if not exists inv.adj_number_seq;
@@ -82,11 +82,11 @@ create trigger trg_location_updated before update on inv.location
   for each row execute function inv.set_updated_at();
 
 insert into inv.location (code, name, is_default)
-select 'MAIN', 'Hovedlager', true
+select 'MAIN', 'Main warehouse', true
 where not exists (select 1 from inv.location where is_default);
 
 -- ---------------------------------------------------------------------------
--- item — speil av Woo-produktmaster (én rad per simple-produkt / variasjon)
+-- item — mirror of the Woo product master (one row per simple product / variation)
 -- ---------------------------------------------------------------------------
 create table if not exists inv.item (
   id                uuid primary key default gen_random_uuid(),
@@ -111,7 +111,7 @@ create trigger trg_item_updated before update on inv.item
   for each row execute function inv.set_updated_at();
 
 -- ---------------------------------------------------------------------------
--- movement — selve ledgeren (append-only)
+-- movement — the ledger itself (append-only)
 -- ---------------------------------------------------------------------------
 create table if not exists inv.movement (
   id              bigserial primary key,
@@ -148,7 +148,7 @@ create index if not exists idx_movement_ref        on inv.movement (ref_type, re
 create unique index if not exists uq_movement_ref  on inv.movement (ref_type, ref_id, ref_line) nulls not distinct
   where ref_type is not null;
 
--- Append-only: bare kostfelter + reversed_by kan endres, aldri DELETE.
+-- Append-only: only cost fields + reversed_by may change, never DELETE.
 create or replace function inv.movement_guard() returns trigger
 language plpgsql as $$
 begin
@@ -172,7 +172,7 @@ create trigger trg_movement_guard before update or delete on inv.movement
   for each row execute function inv.movement_guard();
 
 -- ---------------------------------------------------------------------------
--- cost_layer — FIFO-lag
+-- cost_layer — FIFO layers
 -- ---------------------------------------------------------------------------
 create table if not exists inv.cost_layer (
   id              bigserial primary key,
@@ -191,7 +191,7 @@ create index if not exists idx_layer_fifo on inv.cost_layer (item_id, location_i
 create index if not exists idx_layer_movement on inv.cost_layer (movement_id);
 
 -- ---------------------------------------------------------------------------
--- layer_consumption — hvilke lag et uttak brukte
+-- layer_consumption — which layers an outbound movement consumed
 -- ---------------------------------------------------------------------------
 create table if not exists inv.layer_consumption (
   id                      bigserial primary key,
@@ -209,7 +209,7 @@ create index if not exists idx_consumption_open     on inv.layer_consumption (mo
   where layer_id is null and covered_by_movement_id is null;
 
 -- ---------------------------------------------------------------------------
--- cogs_correction — differanse når estimert kost blir dekket av faktisk lag
+-- cogs_correction — difference when an estimated cost is covered by a real layer
 -- ---------------------------------------------------------------------------
 create table if not exists inv.cogs_correction (
   id                      bigserial primary key,
@@ -225,7 +225,7 @@ create index if not exists idx_cogs_corr_movement on inv.cogs_correction (moveme
 create index if not exists idx_cogs_corr_created  on inv.cogs_correction (created_at);
 
 -- ---------------------------------------------------------------------------
--- stock_balance — cache + låserad per (vare × lokasjon)
+-- stock_balance — cache + lock row per (item × location)
 -- ---------------------------------------------------------------------------
 create table if not exists inv.stock_balance (
   item_id      uuid not null references inv.item(id),
@@ -238,7 +238,7 @@ create table if not exists inv.stock_balance (
 );
 
 -- ---------------------------------------------------------------------------
--- Innkjøp
+-- Purchasing
 -- ---------------------------------------------------------------------------
 create table if not exists inv.purchase_order (
   id             uuid primary key default gen_random_uuid(),
@@ -318,7 +318,7 @@ create table if not exists inv.goods_receipt_line (
 create index if not exists idx_grl_receipt on inv.goods_receipt_line (receipt_id);
 
 -- ---------------------------------------------------------------------------
--- Justering
+-- Adjustment
 -- ---------------------------------------------------------------------------
 create table if not exists inv.adjustment (
   id           uuid primary key default gen_random_uuid(),
@@ -352,7 +352,7 @@ create table if not exists inv.adjustment_line (
 create index if not exists idx_adjl_adj on inv.adjustment_line (adjustment_id);
 
 -- ---------------------------------------------------------------------------
--- Overføring
+-- Transfer
 -- ---------------------------------------------------------------------------
 create table if not exists inv.transfer (
   id                uuid primary key default gen_random_uuid(),

@@ -108,7 +108,7 @@ describe('stock + movements', () => {
     const twice = await call(movementReverse, { method: 'POST', query: { id: String(id) }, body: {} });
     expect(twice.status).toBe(409);
     expect(twice.body.error.code).toBe('ALREADY_REVERSED');
-    // reverserte skjules som default
+    // reversed movements are hidden by default
     const after = await call(movements, { query: { sku: 'SM-1', type: 'sale' } });
     expect(after.body.data).toHaveLength(0);
     const incl = await call(movements, { query: { sku: 'SM-1', include_reversed: '1' } });

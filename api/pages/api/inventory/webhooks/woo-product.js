@@ -1,4 +1,4 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { readRawBody, verifyWooSignature, isWooPing } from '../../../../lib/inventory/woo-order';
 import { upsertWooProduct, deactivateWooProduct } from '../../../../lib/inventory/woo-push';
 import { rpc } from '../../../../lib/inventory/rpc';
@@ -23,7 +23,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: { code: 'VALIDATION', message: 'invalid JSON', details: {} } });
   }
   try {
-    // Variasjons-webhooks (product.updated for en variasjon) har parent_id satt
+    // Variation webhooks (product.updated for one variation) set parent_id
     if (p?.parent_id) {
       const { wooGet } = await import('../../../../lib/inventory/woo');
       p = await wooGet(`/products/${p.parent_id}`);

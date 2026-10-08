@@ -69,7 +69,7 @@ describe('woo integration (mocked Woo)', () => {
     const varr = mock.state.requests.find((q) => q.path === '/products/9002/variations/batch');
     expect(varr.body.update).toEqual([{ id: 9102, stock_quantity: 3 }]);
     expect(mock.state.products[0].stock_quantity).toBe(14);
-    // Ingenting nytt → ingen kall
+    // Nothing new → no calls
     mock.state.requests = [];
     const again = await pushStock();
     expect(again.pushed).toBe(0);
@@ -84,7 +84,7 @@ describe('woo integration (mocked Woo)', () => {
     const st = await call(syncStatusRoute);
     expect(st.body.failed_items.map((f) => f.sku)).toContain('W-1');
     expect(st.body.woo_configured).toBe(true);
-    // backoff: ikke due rett etterpå
+    // backoff: not due immediately afterwards
     mock.state.failIds.clear();
     const r2 = await call(pushRoute, { method: 'POST' });
     expect(r2.status).toBe(200);
@@ -144,7 +144,7 @@ describe('woo integration (mocked Woo)', () => {
 
   it('reconcile reports diffs and fix pushes ledger value (ledger is master)', async () => {
     await db(`select inv.mark_stock_pushed(item_id, 0, true) from inv.stock_push_queue`);
-    mock.state.products[0].stock_quantity = 99;   // noen endret i wp-admin
+    mock.state.products[0].stock_quantity = 99;   // someone changed it in wp-admin
     const r = await reconcile({ fix: false });
     const d = r.diffs.find((x) => x.sku === 'W-1');
     expect(d).toMatchObject({ woo: 99, ledger: 12 });

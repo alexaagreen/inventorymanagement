@@ -1,24 +1,24 @@
--- inventory-ledger v0.2.0
+-- inventory-ledger v0.6.0
 -- =============================================================================
--- 0004_inv_woo.sql — Woo-kjernen i SQL (spec §2.11, §5.5, §7)
+-- 0004_inv_woo.sql — Woo core in SQL (spec §2.11, §5.5, §7)
 -- =============================================================================
--- Ren Postgres, ingen nettverk. HTTP-laget (api/lib/inventory/woo-*.js) henter
--- data fra Woo og pusher beholdning; her bor tilstandsmaskin og kø.
+-- Plain Postgres, no network. The HTTP layer (api/lib/inventory/woo-*.js) fetches
+-- data from Woo and pushes stock; the state machine and the queue live here.
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
--- Tabeller
+-- Tables
 -- ---------------------------------------------------------------------------
 create table if not exists inv.woo_order_sync (
   woo_order_id   bigint primary key,
   woo_status     text,
   stock_state    text not null default 'none' check (stock_state in ('none','deducted','restored')),
   location_id    uuid references inv.location(id),
-  -- Per linje: {line_id, item_id, sku, ordered, net, refunded, seq}
-  --   ordered  = sist sette antall på ordrelinjen
-  --   net      = netto trukket fra lager for linjen (salg − returer)
-  --   refunded = antall returnert via Woo-refusjoner
-  --   seq      = teller for unike ref_line på påfølgende bevegelser
+  -- Per line: {line_id, item_id, sku, ordered, net, refunded, seq}
+  --   ordered  = quantity last seen on the order line
+  --   net      = net quantity taken from stock for the line (sales − returns)
+  --   refunded = quantity returned via Woo refunds
+  --   seq      = counter for unique ref_line values on later movements
   lines          jsonb not null default '[]',
   refunds        jsonb not null default '[]',
   unmatched      jsonb not null default '[]',
@@ -56,7 +56,7 @@ create table if not exists inv.woo_webhook_log (
 create index if not exists idx_woo_webhook_log_time on inv.woo_webhook_log (received_at desc);
 
 -- ---------------------------------------------------------------------------
--- Push-kø: hver bevegelse og relevante vare-endringer ber om push
+-- Push queue: every movement and relevant item change asks for a push
 -- ---------------------------------------------------------------------------
 create or replace function inv.enqueue_stock_push_trg() returns trigger
 language plpgsql as $$
@@ -85,7 +85,7 @@ drop trigger if exists trg_item_enqueue_push on inv.item;
 create trigger trg_item_enqueue_push after update on inv.item
   for each row execute function inv.enqueue_item_push_trg();
 
--- Be eksplisitt om push (reconcile/fix). p_skus null = alle sporede varer med Woo-id.
+-- Ask for a push explicitly (reconcile/fix). p_skus null = every tracked item with a Woo id.
 create or replace function inv.enqueue_stock_push(p_skus text[] default null) returns jsonb
 language plpgsql as $$
 declare n int;
@@ -99,15 +99,15 @@ begin
   return jsonb_build_object('enqueued', n);
 end $$;
 
--- Hent og «claim» varer som skal pushes. Claim (2 min) gjør at parallelle
--- workere ikke tar samme vare. Varer som ikke kan pushes markeres skipped.
+-- Fetch and claim items that should be pushed. The claim (2 min) stops parallel
+-- workers from taking the same item. Items that cannot be pushed are marked skipped.
 create or replace function inv.list_stock_push_due(p_limit int default 100) returns jsonb
 language plpgsql as $$
 declare
   v_floor boolean := inv._setting_bool('woo_push_floor_zero');
   v jsonb;
 begin
-  -- Ikke-pushbare: marker skipped
+  -- Not pushable: mark skipped
   update inv.stock_push_queue q
      set last_pushed_at = clock_timestamp(), last_result = 'skipped',
          last_error = case when not i.track_stock then 'track_stock=false'
@@ -179,7 +179,7 @@ language sql stable as $$
 $$;
 
 -- ---------------------------------------------------------------------------
--- Webhook-logg (30 dagers retensjon)
+-- Webhook log (30-day retention)
 -- ---------------------------------------------------------------------------
 create or replace function inv.log_woo_webhook(p_topic text, p_resource_id text, p_result text, p_message text default null)
 returns void language plpgsql as $$
@@ -192,9 +192,9 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Varer i bulk (Woo-produkter/variasjoner → inv.item)
+-- Items in bulk (Woo products/variations → inv.item)
 -- p: { items: [ {sku, woo_product_id, woo_variation_id, name, track_stock, active}, … ],
---      deactivate_missing: bool }   — deactivate_missing kun ved full katalog.
+--      deactivate_missing: bool }   — deactivate_missing only for a full catalog.
 -- ---------------------------------------------------------------------------
 create or replace function inv.upsert_items(p jsonb) returns jsonb
 language plpgsql as $$
@@ -226,7 +226,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Ordre → salg (spec §7.2)
+-- Order → sale (spec §7.2)
 -- ---------------------------------------------------------------------------
 create or replace function inv._csv_has(p_csv text, p_val text) returns boolean
 language sql immutable as $$
@@ -238,11 +238,11 @@ language plpgsql immutable as $$
 begin
   if p is null or btrim(p) = '' then return null; end if;
   if p ~ '(Z|[+-]\d\d:?\d\d)$' then return p::timestamptz; end if;
-  return (p || 'Z')::timestamptz;   -- *_gmt-felter fra Woo mangler sone
+  return (p || 'Z')::timestamptz;   -- Woo *_gmt fields have no timezone
 exception when others then return null;
 end $$;
 
--- Slå opp vare for en Woo-linje: (product_id, variation_id) først, så SKU.
+-- Resolve an item for a Woo line: (product_id, variation_id) first, then SKU.
 create or replace function inv._woo_line_item(li jsonb) returns uuid
 language plpgsql stable as $$
 declare
@@ -273,7 +273,7 @@ begin
   begin
     return inv._resolve_location(v_code);
   exception when others then
-    return inv._resolve_location(null);  -- ukjent kode → default, ikke velt ordren
+    return inv._resolve_location(null);  -- unknown code → default, do not fail the order
   end;
 end $$;
 
@@ -321,7 +321,7 @@ begin
 
   v_loc := coalesce(s.location_id, inv._woo_order_location(o));
 
-  -- Ønsket tilstand fra payload
+  -- Desired state from the payload
   for li in select * from jsonb_array_elements(coalesce(o->'line_items', '[]')) loop
     v_line_id := li->>'id';
     if v_line_id is null or coalesce((li->>'quantity')::numeric, 0) <= 0 then continue; end if;
@@ -336,12 +336,12 @@ begin
       jsonb_build_object('item_id', v_item, 'sku', inv._sku(v_item), 'qty', (li->>'quantity')::numeric));
   end loop;
 
-  -- Snapshot som map line_id → entry
+  -- Snapshot as a map line_id → entry
   select coalesce(jsonb_object_agg(x->>'line_id', x), '{}') into v_lines
     from jsonb_array_elements(s.lines) x;
 
   if v_deduct then
-    -- Gjelder både none → deducted, restored → deducted og diff mens deducted.
+    -- Applies to none → deducted, restored → deducted, and a diff while deducted.
     for k in select key from (
                select jsonb_object_keys(v_desired) as key
                union select jsonb_object_keys(v_lines)) z
@@ -354,7 +354,7 @@ begin
       v_ord  := (e->>'ordered')::numeric;
       v_net  := (e->>'net')::numeric;
       v_seq  := (e->>'seq')::int;
-      -- Mål: net = ordered − refunded (refunderte varer skal ikke trekkes igjen)
+      -- Target: net = ordered − refunded (refunded units must not be deducted again)
       v_delta := greatest(v_want - (e->>'refunded')::numeric, 0) - v_net;
 
       if v_delta > 0 then
@@ -371,7 +371,7 @@ begin
         v_mid := inv._post_in(v_item, v_loc, 'sale_return',
           jsonb_build_array(jsonb_build_object('qty', -v_delta, 'unit_cost', coalesce(v_uc, (inv._resolve_in_cost(v_item, v_loc, null)).unit_cost))),
           case when v_uc is not null then 'sale_cogs' else 'on_hand_avg' end,
-          'woo_order', v_ref, k || ':r' || v_seq, '#' || v_number, 'Ordrelinje redusert', v_by, now(),
+          'woo_order', v_ref, k || ':r' || v_seq, '#' || v_number, 'Order line reduced', v_by, now(),
           jsonb_build_object('woo_status', v_status, 'woo_line_id', k));
         v_mids := v_mids || v_mid;
         v_net := v_net + v_delta;
@@ -400,7 +400,7 @@ begin
         v_mid := inv._post_in(v_item, v_loc, 'sale_return',
           jsonb_build_array(jsonb_build_object('qty', v_net, 'unit_cost', coalesce(v_uc, (inv._resolve_in_cost(v_item, v_loc, null)).unit_cost))),
           case when v_uc is not null then 'sale_cogs' else 'on_hand_avg' end,
-          'woo_order', v_ref, k || ':r' || v_seq, '#' || v_number, 'Ordre ' || v_status, v_by, now(),
+          'woo_order', v_ref, k || ':r' || v_seq, '#' || v_number, 'Order ' || v_status, v_by, now(),
           jsonb_build_object('woo_status', v_status, 'woo_line_id', k));
         v_mids := v_mids || v_mid;
         v_lines := v_lines || jsonb_build_object(k, e || jsonb_build_object('net', 0, 'seq', v_seq + 1));
@@ -428,9 +428,9 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Refusjon → retur (spec §7.3)
--- refund: Woo REST /orders/:id/refunds/:rid — line_items[].quantity er NEGATIV,
--- og meta_data `_refunded_item_id` peker på original ordrelinje.
+-- Refund → return (spec §7.3)
+-- refund: Woo REST /orders/:id/refunds/:rid — line_items[].quantity is NEGATIVE,
+-- and meta_data `_refunded_item_id` points at the original order line.
 -- ---------------------------------------------------------------------------
 create or replace function inv.apply_woo_refund(p_order_id bigint, r jsonb) returns jsonb
 language plpgsql as $$
@@ -473,7 +473,7 @@ begin
     if k is null then continue; end if;
 
     e := v_lines->k;
-    -- Kun det som faktisk er trukket (stock_state deducted) kan returneres
+    -- Only what was actually deducted (stock_state deducted) can be returned
     v_take := case when s.stock_state = 'deducted' then least(v_qty, (e->>'net')::numeric) else 0 end;
     if v_take > 0 then
       v_item := (e->>'item_id')::uuid;
@@ -482,11 +482,11 @@ begin
         jsonb_build_array(jsonb_build_object('qty', v_take, 'unit_cost',
           coalesce(v_uc, (inv._resolve_in_cost(v_item, coalesce(s.location_id, inv._resolve_location(null)), null)).unit_cost))),
         case when v_uc is not null then 'sale_cogs' else 'on_hand_avg' end,
-        'woo_refund', v_rid, coalesce(li->>'id', k), '#' || p_order_id, 'Refusjon ' || v_rid, v_by, now(),
+        'woo_refund', v_rid, coalesce(li->>'id', k), '#' || p_order_id, 'Refund ' || v_rid, v_by, now(),
         jsonb_build_object('woo_order_id', p_order_id, 'woo_line_id', k));
       v_mids := v_mids || v_mid;
     end if;
-    -- refunded økes uansett (også om ordren ikke er trukket), så re-trekk ikke tar refunderte varer
+    -- refunded increases either way (even if the order was not deducted), so a later deduct skips refunded units
     v_lines := v_lines || jsonb_build_object(k, e || jsonb_build_object(
       'net', (e->>'net')::numeric - v_take,
       'refunded', (e->>'refunded')::numeric + v_qty));
