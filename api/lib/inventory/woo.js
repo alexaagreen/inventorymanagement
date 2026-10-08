@@ -8,12 +8,20 @@
 
 const TIMEOUT_MS = Number(process.env.INVENTORY_WOO_TIMEOUT_MS || 20000);
 
+// WC_API_URL / WC_CONSUMER_KEY / WC_CONSUMER_SECRET are accepted as aliases (used by
+// storefronts and backend-handel).
 function base() {
-  return (process.env.WOOCOMMERCE_STORE_URL || '').replace(/\/$/, '');
+  return (process.env.WOOCOMMERCE_STORE_URL || process.env.WC_API_URL || '').replace(/\/$/, '');
+}
+function consumerKey() {
+  return process.env.WOOCOMMERCE_CONSUMER_KEY || process.env.WC_CONSUMER_KEY || '';
+}
+function consumerSecret() {
+  return process.env.WOOCOMMERCE_CONSUMER_SECRET || process.env.WC_CONSUMER_SECRET || '';
 }
 
 export function wooConfigured() {
-  return Boolean(base() && process.env.WOOCOMMERCE_CONSUMER_KEY && process.env.WOOCOMMERCE_CONSUMER_SECRET);
+  return Boolean(base() && consumerKey() && consumerSecret());
 }
 
 export class WooError extends Error {
@@ -27,8 +35,8 @@ export class WooError extends Error {
 
 function url(path, params = {}) {
   const u = new URL(`${base()}/wp-json/wc/v3${path}`);
-  u.searchParams.set('consumer_key', process.env.WOOCOMMERCE_CONSUMER_KEY || '');
-  u.searchParams.set('consumer_secret', process.env.WOOCOMMERCE_CONSUMER_SECRET || '');
+  u.searchParams.set('consumer_key', consumerKey());
+  u.searchParams.set('consumer_secret', consumerSecret());
   for (const [k, v] of Object.entries(params)) if (v != null && v !== '') u.searchParams.set(k, String(v));
   return u;
 }

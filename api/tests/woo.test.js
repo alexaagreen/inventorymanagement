@@ -65,9 +65,9 @@ describe('woo integration (mocked Woo)', () => {
     const r = await pushStock({ limit: 100 });
     expect(r.pushed).toBe(2);
     const simple = mock.state.requests.find((q) => q.path === '/products/batch');
-    expect(simple.body.update).toEqual([{ id: 9001, stock_quantity: 14 }]);
+    expect(simple.body.update).toEqual([{ id: 9001, manage_stock: true, stock_quantity: 14 }]);
     const varr = mock.state.requests.find((q) => q.path === '/products/9002/variations/batch');
-    expect(varr.body.update).toEqual([{ id: 9102, stock_quantity: 3 }]);
+    expect(varr.body.update).toEqual([{ id: 9102, manage_stock: true, stock_quantity: 3 }]);
     expect(mock.state.products[0].stock_quantity).toBe(14);
     // Ingenting nytt → ingen kall
     mock.state.requests = [];
