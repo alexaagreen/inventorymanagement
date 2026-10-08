@@ -487,6 +487,10 @@ ekskluderte røtter. Bundles (`products.bundle_components is not null`) følges 
 komponentene. Push sender `manage_stock: true` sammen med `stock_quantity`, så Woo begynner å styre lageret ved
 første push.
 
+`orders_skip_untracked` (v0.6.0, migrasjon 0092, standard `false`): når `true` hoppes ordrelinjer for varer med
+`track_stock=false` over i `apply_woo_order` og listes som `ignored_untracked` i svaret (ikke som `unmatched`). Brukes når
+samme Woo selger varer ledgeren ikke skal telle (utleie, tjenester). Standard `false` beholder T22-oppførselen.
+
 **Valuta (v0.5.1).** Ledgeren er alltid i NOK (`base_currency`); PO-er kan være i hvilken som helst valuta,
 og mottaket regner `unit_cost_base = unit_cost × fx_rate + landed_cost_per_unit`. `GET /fx/norges-bank`
 gir Norges Banks kurs (NOK per 1 enhet, siste virkedag på eller før `date`; per-100-noteringer som JPY,
