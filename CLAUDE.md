@@ -49,6 +49,7 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `migrations/0005_inv_api.sql` | `idempotency_key`, `list_locations` |
 | `migrations/0006_inv_grants.sql` | revoke alt for PUBLIC/anon/authenticated (inv er server-only) |
 | `migrations/0007_inv_opening_balance.sql` | `import_opening_balance` (dry run, alt-eller-ingenting, idempotent per SKU×lokasjon) |
+| `migrations/0091_inv_catalog_track_rules.sql` | v0.6.0: `track_stock_mode` (`woo_manage_stock`/`all`), `track_exclude_category_slugs`, bundles følges aldri — erstatter 0090-funksjonen |
 | `migrations/0090_inv_catalog_adapter_storefront.sql` | `upsert_items_from_catalog()` fra nettbutikkens speil (felles for alle butikker) |
 | `scripts/install.mjs` | installerer i butikk: `--api`, `--migrations`, `--check`, `--dry-run`, `--force` |
 | `api/lib/inventory/config.example.js` | mal for butikkens `config.js` (NextAuth `getToken` / `getServerSession`) |
@@ -82,7 +83,10 @@ cd api && npm ci && npm test && npm run build
 - Webhook-rutene bruker ikke `route()` (rå body for HMAC, `bodyParser: false`) og må allowlistes i
   butikkens `middleware.js`. Fail-closed uten `WC_WEBHOOK_SECRET`.
 - Env: `INVENTORY_DATABASE_URL`, `INVENTORY_API_KEY` (kommaseparert liste tillatt), `WC_WEBHOOK_SECRET`,
-  `WOOCOMMERCE_STORE_URL`, `WOOCOMMERCE_CONSUMER_KEY`, `WOOCOMMERCE_CONSUMER_SECRET`.
+  `WOOCOMMERCE_STORE_URL`, `WOOCOMMERCE_CONSUMER_KEY`, `WOOCOMMERCE_CONSUMER_SECRET` (aliaser fra v0.6.0:
+  `WC_API_URL`, `WC_CONSUMER_KEY`, `WC_CONSUMER_SECRET`).
+- **Språk i `api/` og `scripts/`: engelsk** (fra v0.6.0) — kommentarer, logg- og feiltekster. Unntak: `no`-ordboka i
+  `errors.js` (norsk brukertekst) og API-verdier som `kind=salg`. Noen butikker (backend-handel) har English-only-regel.
 - Avhengigheter i butikken: kun `pg` (allerede i begge internal-webs). Ingen zod.
 
 ## Konvensjoner i SQL

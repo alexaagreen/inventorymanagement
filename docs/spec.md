@@ -480,6 +480,13 @@ GET    /purchase-orders/on-order?sku=          → [{ sku, po_number, qty_open, 
 GET    /fx/norges-bank?currency=JPY&date=      → { currency, rate, quoted, per_units, date, requested_date, source }
 ```
 
+**Hvilke varer som følges (v0.6.0, migrasjon 0091).** `inv.settings.track_stock_mode` = `woo_manage_stock`
+(standard: følger Woo `manage_stock`) eller `all` (alt følges). `track_exclude_category_slugs` = kommaseparerte
+rot-slugs som aldri følges (f.eks. `utleie`); en vare ekskluderes bare når ALLE dens kategorier ligger under
+ekskluderte røtter. Bundles (`products.bundle_components is not null`) følges aldri — ordren eksploderes til
+komponentene. Push sender `manage_stock: true` sammen med `stock_quantity`, så Woo begynner å styre lageret ved
+første push.
+
 **Valuta (v0.5.1).** Ledgeren er alltid i NOK (`base_currency`); PO-er kan være i hvilken som helst valuta,
 og mottaket regner `unit_cost_base = unit_cost × fx_rate + landed_cost_per_unit`. `GET /fx/norges-bank`
 gir Norges Banks kurs (NOK per 1 enhet, siste virkedag på eller før `date`; per-100-noteringer som JPY,

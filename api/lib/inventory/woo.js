@@ -1,10 +1,10 @@
-// inventory-ledger v0.5.1 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// Minimal WooCommerce REST-klient for ledgeren. Leser alt fra env — aldri hardkodede
-// URL-er eller nøkler (se butikkenes CLAUDE.md):
-//   WOOCOMMERCE_STORE_URL        f.eks. https://admin.skarpekniver.com
+// Minimal WooCommerce REST client for the ledger. Reads everything from env — never hardcoded
+// URLs or keys (see the shops' CLAUDE.md):
+//   WOOCOMMERCE_STORE_URL        e.g. https://admin.skarpekniver.com
 //   WOOCOMMERCE_CONSUMER_KEY / WOOCOMMERCE_CONSUMER_SECRET
-// Retry på 429/5xx/nettverksfeil med eksponentiell backoff.
+// Retries on 429/5xx/network errors with exponential backoff.
 
 const TIMEOUT_MS = Number(process.env.INVENTORY_WOO_TIMEOUT_MS || 20000);
 
@@ -76,7 +76,7 @@ export async function wooRequest(method, path, { params, body, retries = 3 } = {
 export const wooGet = (path, params) => wooRequest('GET', path, { params }).then((r) => r.data);
 export const wooPost = (path, body) => wooRequest('POST', path, { body }).then((r) => r.data);
 
-/** Hent alle sider (per_page 100). `onPage` kan brukes for strømming. */
+/** Fetch all pages (per_page 100). `onPage` can be used for streaming. */
 export async function wooGetAll(path, params = {}, { maxPages = 200 } = {}) {
   const out = [];
   for (let page = 1; page <= maxPages; page++) {

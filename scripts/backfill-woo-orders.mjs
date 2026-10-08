@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Backfill Woo-ordrer inn i ledgeren via API-et (idempotent — trygt å kjøre flere ganger).
+// Backfill Woo orders into the ledger via the API (idempotent — safe to run multiple times).
 //   INVENTORY_BASE_URL=https://internalweb-alpha.vercel.app INVENTORY_API_KEY=… \
 //     node scripts/backfill-woo-orders.mjs --from 2026-10-01T00:00:00Z [--to …]
-// Kaller POST /api/inventory/sync/import-orders og følger next_page til ferdig.
+// Calls POST /api/inventory/sync/import-orders and follows next_page until done.
 const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, arr) => {
   if (a.startsWith('--')) acc.push([a.slice(2), arr[i + 1]]);
   return acc;

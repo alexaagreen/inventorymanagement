@@ -1,13 +1,13 @@
-// Minimal WooCommerce REST-mock for tester (ingen avhengigheter).
+// Minimal WooCommerce REST mock for tests (no dependencies).
 import http from 'node:http';
 
 export function startWooMock() {
   const state = {
-    products: [],            // Woo product-objekter
+    products: [],            // Woo product objects
     variations: {},          // parentId → [variation]
     refunds: {},             // `${orderId}:${refundId}` → refund
     orders: [],              // for /orders-backfill
-    failIds: new Set(),      // id-er som skal feile i batch
+    failIds: new Set(),      // ids that should fail in batch
     requests: [],
   };
   const server = http.createServer((req, res) => {

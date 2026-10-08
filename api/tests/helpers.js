@@ -4,7 +4,7 @@ export const API_KEY = 'test-key';
 process.env.INVENTORY_API_KEY = API_KEY;
 process.env.INVENTORY_DATABASE_URL = process.env.INVENTORY_DATABASE_URL || process.env.DATABASE_URL;
 
-/** Kall en Next API-handler med en minimal req/res. */
+/** Call a Next API handler with a minimal req/res. */
 export async function call(handler, { method = 'GET', query: q = {}, body, headers = {}, auth = true } = {}) {
   const req = {
     method,

@@ -1,8 +1,8 @@
-// inventory-ledger v0.5.1 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// Ledger → Woo: push av tilgjengelig beholdning (outbox-worker), reconcile, og
-// Woo → ledger: synk av varer (produkter/variasjoner → inv.item).
-// Ledgeren er master: reconcile retter ALDRI ledgeren fra Woo — bare motsatt.
+// Ledger → Woo: push of available stock (outbox worker), reconcile, and
+// Woo → ledger: item sync (products/variations → inv.item).
+// The ledger is master: reconcile NEVER corrects the ledger from Woo — only the other way round.
 import { rpc, sql } from './rpc';
 import { wooConfigured, wooPost, wooGetAll, WooError } from './woo';
 import { inventoryConfig } from './config';
@@ -31,7 +31,7 @@ async function markAll(rows, ok, error) {
   }
 }
 
-/** Behandle Woo batch-svar: { update: [{ id, stock_quantity } | { id, error: {…} }] } */
+/** Handle a Woo batch response: { update: [{ id, stock_quantity } | { id, error: {…} }] } */
 async function applyBatchResult(rows, result, idKey) {
   const byId = new Map((result?.update || []).map((u) => [String(u.id), u]));
   let pushed = 0; let failed = 0;
@@ -47,8 +47,8 @@ async function applyBatchResult(rows, result, idKey) {
 }
 
 /**
- * Drener push-køen. Simple produkter: POST /products/batch.
- * Variasjoner: POST /products/:parent/variations/batch (én per parent).
+ * Drain the push queue. Simple products: POST /products/batch.
+ * Variations: POST /products/:parent/variations/batch (one per parent).
  */
 export async function pushStock({ limit = 100 } = {}) {
   if (!(await pushEnabled())) return { pushed: 0, failed: 0, skipped: 0, disabled: true };
@@ -90,8 +90,8 @@ export async function pushStock({ limit = 100 } = {}) {
 }
 
 /**
- * Start push uten å vente (etter skriv). Cron hvert minutt er garantien;
- * dette gjør bare at Woo oppdateres innen sekunder i normaltilfellet.
+ * Start a push without waiting (after a write). The every-minute cron is the guarantee;
+ * this just makes Woo update within seconds in the normal case.
  */
 export function kickPush() {
   if (process.env.INVENTORY_KICK_PUSH === 'off') return;
@@ -99,7 +99,7 @@ export function kickPush() {
   pushStock({ limit: 50 }).catch((err) => console.warn('[inventory] kickPush failed:', err.message));
 }
 
-// ── Woo-katalog ────────────────────────────────────────────────────────────
+// ── Woo catalog ────────────────────────────────────────────────────────────
 
 const ACTIVE_STATUSES = new Set(['publish', 'private']);
 
@@ -183,12 +183,12 @@ async function fetchWooCatalog() {
 }
 
 /**
- * Synk varer. Foretrekker butikkens katalog-adapter (inv.upsert_items_from_catalog,
- * leser Supabase-speilet), ellers Woo REST direkte.
+ * Sync items. Prefers the shop's catalog adapter (inv.upsert_items_from_catalog,
+ * reads the Supabase mirror), otherwise Woo REST directly.
  */
 export async function syncItems({ source = 'auto' } = {}) {
   if (source !== 'woo') {
-    // Adapteren (0090) leser nettbutikkens speil i samme database — bruk den når speilet finnes.
+    // The adapter (0090) reads the storefront mirror in the same database — use it when the mirror exists.
     const [{ has }] = await sql(`select to_regprocedure('inv.upsert_items_from_catalog()') is not null
                                         and to_regclass('public.products') is not null as has`);
     if (has) return { source: 'catalog_adapter', ...(await rpc('upsert_items_from_catalog', [])) };
@@ -202,7 +202,7 @@ export async function syncItems({ source = 'auto' } = {}) {
   return { source: 'woo', ...(await rpc('upsert_items', { items, deactivate_missing: true })) };
 }
 
-/** Upsert ett produkt (webhook product.created/updated). */
+/** Upsert one product (webhook product.created/updated). */
 export async function upsertWooProduct(product) {
   let variations = [];
   if (product.type === 'variable') variations = await wooGetAll(`/products/${product.id}/variations`, { status: 'any' });
@@ -210,7 +210,7 @@ export async function upsertWooProduct(product) {
   const roots = rules.exclude.length ? await categoryRoots() : null;
   const items = mapWooProduct(product, variations, rules, roots);
   const res = await rpc('upsert_items', { items, deactivate_missing: false });
-  // Variasjoner som er fjernet fra produktet → inaktive
+  // Variations removed from the product → inactive
   if (product.type === 'variable') {
     const keep = variations.map((v) => v.id);
     await sql(
@@ -229,8 +229,8 @@ export async function deactivateWooProduct(productId) {
 // ── Reconcile ──────────────────────────────────────────────────────────────
 
 /**
- * Sammenlign Woo stock_quantity med ledgerens available for alle sporede varer.
- * fix=true legger avvikene i push-køen og pusher. Woo-verdien skrives aldri inn i ledgeren.
+ * Compare Woo stock_quantity with the ledger's available for all tracked items.
+ * fix=true enqueues the differences and pushes. The Woo value is never written into the ledger.
  */
 export async function reconcile({ fix = false } = {}) {
   if (!wooConfigured()) throw new WooError(0, 'WooCommerce is not configured');

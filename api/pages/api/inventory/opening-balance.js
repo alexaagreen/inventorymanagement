@@ -1,11 +1,11 @@
-// inventory-ledger v0.5.1 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, withStatus } from '../../../lib/inventory/handler';
 import { rpc } from '../../../lib/inventory/rpc';
 import { InventoryError } from '../../../lib/inventory/errors';
 
 // POST /api/inventory/opening-balance  { rows: [{ sku, location?, qty, unit_cost }], dry_run?, occurred_at? }
-// Alt-eller-ingenting: én ugyldig rad → ingenting skrives, svaret lister feilene.
-// Idempotent per SKU × lokasjon (allerede importerte rader telles som existing).
+// All-or-nothing: one invalid row → nothing is written, the response lists the errors.
+// Idempotent per SKU × location (already imported rows are counted as existing).
 export default route({
   POST: async (req, res, { body, by }) => {
     if (!Array.isArray(body.rows) || body.rows.length === 0) {
