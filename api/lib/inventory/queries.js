@@ -1,4 +1,4 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.5.1 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Lesespørringer for liste-endepunktene. Ingen forretningslogikk — kun filtre,
 // sortering og keyset-paginering over viewene i schema `inv`.

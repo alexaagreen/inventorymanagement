@@ -477,7 +477,15 @@ POST   /purchase-orders/:id/status             { status: 'sent'|'cancelled'|'clo
 POST   /purchase-orders/:id/receive            { receive_purchase_order-input }     → 201 goods_receipt (+ movements)
 GET    /receipts?po_id=&from=&to=              ; GET /receipts/:id ; POST /receipts/:id/reverse { by, note }
 GET    /purchase-orders/on-order?sku=          → [{ sku, po_number, qty_open, expected_at }]
+GET    /fx/norges-bank?currency=JPY&date=      → { currency, rate, quoted, per_units, date, requested_date, source }
 ```
+
+**Valuta (v0.5.1).** Ledgeren er alltid i NOK (`base_currency`); PO-er kan være i hvilken som helst valuta,
+og mottaket regner `unit_cost_base = unit_cost × fx_rate + landed_cost_per_unit`. `GET /fx/norges-bank`
+gir Norges Banks kurs (NOK per 1 enhet, siste virkedag på eller før `date`; per-100-noteringer som JPY,
+SEK, DKK er regnet om) **kun som referanse** — UI-et viser den ved kursfeltet på PO og mottak, men
+fyller aldri inn eller bruker den automatisk. Kursen som brukes er alltid den en person skriver inn.
+`502 UPSTREAM` hvis Norges Bank ikke svarer.
 
 ### 6.4 Justering og overføring
 ```

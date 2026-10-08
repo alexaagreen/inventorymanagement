@@ -1,4 +1,4 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.5.1 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Egen pg-pool mot databasen der schema `inv` bor.
 //   INVENTORY_DATABASE_URL — PÅKREVD. Peker alltid på butikkens (storefrontens) Supabase,

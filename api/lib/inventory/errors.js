@@ -1,4 +1,4 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.5.1 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Feilkoder → HTTP-status (spec §6.0) og norsk brukertekst for UI.
 // Isomorf: ingen server-importer, trygg i React.
@@ -20,6 +20,7 @@ export const STATUS_BY_CODE = {
   COST_REQUIRED: 422,
   OVER_RECEIPT: 422,
   PO_STATUS_INVALID: 422,
+  UPSTREAM: 502,
   INTERNAL: 500,
 };
 

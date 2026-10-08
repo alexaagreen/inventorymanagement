@@ -1,4 +1,4 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.5.1 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Ledger → Woo: push av tilgjengelig beholdning (outbox-worker), reconcile, og
 // Woo → ledger: synk av varer (produkter/variasjoner → inv.item).

@@ -53,6 +53,7 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `scripts/install.mjs` | installerer i butikk: `--api`, `--migrations`, `--check`, `--dry-run`, `--force` |
 | `api/lib/inventory/config.example.js` | mal for butikkens `config.js` (NextAuth `getToken` / `getServerSession`) |
 | `api/lib/inventory/` | HTTP-laget: `db` (egen pool), `rpc` (inv.* → jsonb, feilmapping), `handler` (route-wrapper: auth, 405, Idempotency-Key, feil), `queries` (lister/keyset), `auth`, `errors` (kode→status + norsk brukertekst), `csv`, `client` (fetch-helper for UI), `config` (**butikk-spesifikk, overskrives ikke**) |
+| `api/lib/inventory/fx.js` | Norges Bank-kurs som referanse (`GET /fx/norges-bank`) — vises i UI, brukes aldri automatisk |
 | `api/lib/inventory/woo*.js` | `woo` (REST-klient, env-styrt, retry), `woo-push` (push-worker, `kickPush`, reconcile, item-sync), `woo-order` (HMAC-webhook, ordre+refusjon, backfill) |
 | `api/pages/api/inventory/**` | rutene i spec §6.1–6.6 (inkl. `webhooks/*`, `sync/*`, `items/sync`) |
 | `scripts/backfill-woo-orders.mjs` | backfill via API, følger `next_page` |
