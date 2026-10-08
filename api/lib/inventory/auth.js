@@ -1,10 +1,10 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// requireInventoryAuth(req, res) → { by, via } eller null (og 401 er sendt).
-// Godtar:
-//   Authorization: Bearer $INVENTORY_API_KEY   (agenter, cron, server-til-server)
-//   innlogget session via config.getSessionUser (UI)
-// Webhook-ruter bruker HMAC i stedet (woo-webhook.js).
+// requireInventoryAuth(req, res) → { by, via } or null (and 401 has been sent).
+// Accepts:
+//   Authorization: Bearer $INVENTORY_API_KEY   (agents, cron, server-to-server)
+//   a signed-in session via config.getSessionUser (UI)
+// Webhook routes use HMAC instead (woo-order.js).
 import crypto from 'node:crypto';
 import { getSessionUser } from './config';
 import { InventoryError } from './errors';
@@ -21,13 +21,13 @@ function bearer(req) {
   return m ? m[1].trim() : null;
 }
 
-/** Kaster InventoryError('UNAUTHORIZED') hvis ingen gyldig auth. */
+/** Throws InventoryError('UNAUTHORIZED') when there is no valid auth. */
 export async function authenticate(req, res) {
   const keys = String(process.env.INVENTORY_API_KEY || '')
     .split(',').map((s) => s.trim()).filter(Boolean);
   const token = bearer(req);
   if (token && keys.length && keys.some((k) => safeEqual(token, k))) {
-    // Agenter kan attribuere med body.by / x-inventory-by
+    // Agents may attribute the write with body.by / x-inventory-by
     const by = req.headers?.['x-inventory-by'] || req.body?.by || 'api-key';
     return { by: String(by).slice(0, 200), via: 'api-key' };
   }

@@ -118,7 +118,47 @@ function installApi() {
   if (!CHECK) log(`API → ${rel(API)}: ${copied} written, ${same} unchanged${DRY ? ' (dry run)' : ''}`);
 }
 
-// ── Migrasjoner (nettbutikkens Supabase) ────────────────────────────────────
+// Strip comments so the install log can tell a comment refresh from a SQL-text change.
+// Already-applied files are never re-run; the hash of the full file still decides the refresh.
+function sqlFingerprint(buf) {
+  const s = String(buf);
+  let out = '';
+  let i = 0;
+  let dollar = null;
+  while (i < s.length) {
+    if (dollar) {
+      if (s.startsWith(dollar, i)) { out += dollar; i += dollar.length; dollar = null; continue; }
+      out += s[i++];
+      continue;
+    }
+    if (s[i] === '-' && s[i + 1] === '-') {
+      const nl = s.indexOf('\n', i);
+      i = nl < 0 ? s.length : nl;
+      continue;
+    }
+    if (s[i] === '/' && s[i + 1] === '*') {
+      const end = s.indexOf('*/', i + 2);
+      i = end < 0 ? s.length : end + 2;
+      continue;
+    }
+    if (s[i] === "'") {
+      out += s[i++];
+      while (i < s.length) {
+        out += s[i];
+        if (s[i] === "'" && s[i + 1] === "'") { out += s[++i]; i++; continue; }
+        if (s[i] === "'") { i++; break; }
+        i++;
+      }
+      continue;
+    }
+    const tag = s[i] === '$' ? /^\$[A-Za-z0-9_]*\$/.exec(s.slice(i)) : null;
+    if (tag) { dollar = tag[0]; out += dollar; i += dollar.length; continue; }
+    out += s[i++];
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+// ── Migrations (the shop Supabase) ──────────────────────────────────────────
 function tsUtc(d) {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`;
@@ -138,17 +178,40 @@ function installMigrations() {
 
   const newLock = { module: 'inventory-ledger', version: VERSION, installed_at: new Date().toISOString(), migrations: { ...(lock.migrations || {}) } };
   let added = 0;
+  let refreshed = 0;
   const srcs = fs.readdirSync(path.join(ROOT, 'migrations')).filter((n) => /^\d{4}_inv_.+\.sql$/.test(n)).sort();
   for (const name of srcs) {
     const buf = fs.readFileSync(path.join(ROOT, 'migrations', name));
     const want = sha(buf);
     const have = byModuleName.get(name);
     if (have) {
-      const cur = sha(fs.readFileSync(path.join(MIG, have)));
-      if (cur !== want) {
-        log(`  ✗ ${have} differs from module ${name} — shipped migrations are immutable; add a new migration upstream instead`);
-        problems++;
+      const filePath = path.join(MIG, have);
+      const curBuf = fs.readFileSync(filePath);
+      const cur = sha(curBuf);
+      if (cur === want) {
+        newLock.migrations[name] = { ...(newLock.migrations[name] || {}), file: have, sha256: want, version: newLock.migrations[name]?.version || VERSION };
+        continue;
       }
+      const locked = lock.migrations?.[name]?.sha256;
+      // A shop edit (file hash ≠ lock) stays refused. A lock-matching copy is the previous
+      // module file: refresh it in place. Supabase will not re-run an already-applied name.
+      if (!locked || cur !== locked) {
+        log(`  ✗ ${have} was edited in the shop repo — shipped migrations stay immutable`);
+        problems++;
+        continue;
+      }
+      const commentOnly = sqlFingerprint(curBuf) === sqlFingerprint(buf);
+      const note = commentOnly
+        ? 'comments only'
+        : 'SQL text changed — already applied, not re-run';
+      if (CHECK) {
+        log(`  • outdated  ${have} (${note}; module ${VERSION})`);
+        continue;
+      }
+      write(filePath, buf);
+      newLock.migrations[name] = { ...(newLock.migrations[name] || {}), file: have, sha256: want, version: VERSION };
+      refreshed++;
+      log(`  ↻ ${have} ${DRY ? 'would refresh' : 'refreshed'} from ${name} (${note})`);
       continue;
     }
     if (CHECK) { log(`  • pending   ${name} (not installed yet)`); continue; }
@@ -160,7 +223,7 @@ function installMigrations() {
     log(`  + ${fname}`);
   }
   if (!CHECK && !DRY && problems === 0) fs.writeFileSync(lockPath, JSON.stringify(newLock, null, 2) + '\n');
-  if (!CHECK) log(`Migrations → ${rel(MIG)}: ${added} added${DRY ? ' (dry run)' : ''}`);
+  if (!CHECK) log(`Migrations → ${rel(MIG)}: ${added} added, ${refreshed} refreshed${DRY ? ' (dry run)' : ''}`);
 }
 
 log(`inventory-ledger ${VERSION}${CHECK ? ' — check' : ''}`);

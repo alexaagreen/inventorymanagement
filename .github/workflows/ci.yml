@@ -32,6 +32,33 @@ jobs:
           mkdir -p /tmp/inst/web /tmp/inst/shop/supabase/migrations && echo '{}' > /tmp/inst/web/package.json
           node scripts/install.mjs --api /tmp/inst/web --migrations /tmp/inst/shop/supabase/migrations
           node scripts/install.mjs --api /tmp/inst/web --migrations /tmp/inst/shop/supabase/migrations --check
+          node --input-type=module <<'EOF'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import crypto from 'node:crypto';
+          import { execSync } from 'node:child_process';
+          const migDir = '/tmp/inst/shop/supabase/migrations';
+          const lockPath = '/tmp/inst/shop/supabase/inventory-ledger.migrations.lock.json';
+          const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+          const name = '0001_inv_schema.sql';
+          const entry = lock.migrations[name];
+          const shopFile = path.join(migDir, entry.file);
+          const original = fs.readFileSync(shopFile);
+          const stale = Buffer.from(original.toString('utf8').replace('inventory-ledger v0.6.0', 'inventory-ledger v0.5.0'));
+          if (stale.equals(original)) throw new Error('could not make a stale migration copy');
+          fs.writeFileSync(shopFile, stale);
+          entry.sha256 = crypto.createHash('sha256').update(stale).digest('hex');
+          fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+          execSync('node scripts/install.mjs --api /tmp/inst/web --migrations /tmp/inst/shop/supabase/migrations --check', { stdio: 'inherit' });
+          execSync('node scripts/install.mjs --api /tmp/inst/web --migrations /tmp/inst/shop/supabase/migrations', { stdio: 'inherit' });
+          if (!fs.readFileSync(shopFile).equals(original)) throw new Error('lock-matching migration was not refreshed in place');
+          fs.writeFileSync(shopFile, Buffer.concat([original, Buffer.from('\n-- shop edit\n')]));
+          let refused = false;
+          try {
+            execSync('node scripts/install.mjs --api /tmp/inst/web --migrations /tmp/inst/shop/supabase/migrations --check', { stdio: 'pipe' });
+          } catch { refused = true; }
+          if (!refused) throw new Error('locally edited migration was not refused');
+          EOF
       - name: Migrations from scratch
         run: scripts/db-reset.sh
       - name: SQL acceptance tests

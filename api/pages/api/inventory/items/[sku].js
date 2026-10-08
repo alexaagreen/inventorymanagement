@@ -1,12 +1,12 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, requireParam } from '../../../../lib/inventory/handler';
 import { rpc, sql } from '../../../../lib/inventory/rpc';
 import { InventoryError } from '../../../../lib/inventory/errors';
 
-// Felt som eies av ledgeren. sku/navn/Woo-id/track_stock eies av WooCommerce (synces inn).
+// Fields owned by the ledger. sku/name/Woo id/track_stock are owned by WooCommerce (synced in).
 const EDITABLE = ['reorder_point', 'reorder_qty', 'attributes'];
 
-// GET   /api/inventory/items/:sku  → item + status + lokasjoner + lag
+// GET   /api/inventory/items/:sku  → item + status + locations + layers
 // PATCH /api/inventory/items/:sku  { reorder_point?, reorder_qty?, attributes? }
 export default route({
   GET: async (req, res, { query }) => rpc('get_item_status', [requireParam(query.sku, 'sku')]),

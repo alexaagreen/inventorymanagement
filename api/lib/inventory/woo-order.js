@@ -1,7 +1,7 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// Woo → ledger: webhook-verifisering (HMAC), ordre/refusjon inn i inv.apply_woo_order /
-// inv.apply_woo_refund, og backfill av ordrer fra Woo REST.
+// Woo → ledger: webhook verification (HMAC), order/refund into inv.apply_woo_order /
+// inv.apply_woo_refund, and backfill of orders from Woo REST.
 import crypto from 'node:crypto';
 import { rpc, sql } from './rpc';
 import { wooGet, wooRequest } from './woo';
@@ -18,7 +18,7 @@ export function readRawBody(req) {
   });
 }
 
-/** Fail-closed: uten WC_WEBHOOK_SECRET avvises alt. */
+/** Fail-closed: without WC_WEBHOOK_SECRET everything is rejected. */
 export function verifyWooSignature(rawBody, signature, secret = process.env.WC_WEBHOOK_SECRET || '') {
   if (!secret || !signature) return false;
   const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('base64');
@@ -36,7 +36,7 @@ async function processedRefunds(orderId) {
   return new Set((row?.refunds || []).map(String));
 }
 
-/** Kjør en ordre gjennom ledgeren, inkl. nye refusjoner (hentes fra Woo REST). */
+/** Run an order through the ledger, including new refunds (fetched from Woo REST). */
 export async function applyOrder(order, source = 'webhook') {
   const result = await rpc('apply_woo_order', [order, source]);
   const refunds = [];
@@ -53,7 +53,7 @@ export async function applyOrder(order, source = 'webhook') {
 
 /**
  * Webhook-handler for order.created / order.updated / order.deleted.
- * Returnerer { status, body } — routen sender det.
+ * Returns { status, body } — the route sends that response.
  */
 export async function handleOrderWebhook(rawBody, headers) {
   const topic = headers['x-wc-webhook-topic'] || null;
@@ -85,14 +85,14 @@ export async function handleOrderWebhook(rawBody, headers) {
     return { status: 200, body: { action: r.action, movements: moved, unmatched_skus: r.unmatched_skus, refunds: r.refunds.length } };
   } catch (err) {
     await rpc('log_woo_webhook', [topic, String(order.id), 'error', err.message]).catch(() => {});
-    // 500 → Woo prøver igjen med backoff
+    // 500 → Woo retries with backoff
     return { status: 500, body: { error: { code: err.code || 'INTERNAL', message: err.message, details: err.details || {} } } };
   }
 }
 
 /**
- * Backfill: hent ordrer endret i [from, to) og kjør dem gjennom ledgeren (idempotent).
- * Tidsbudsjett så kallet holder seg innenfor serverless-grensen; returnerer next_page.
+ * Backfill: fetch orders changed in [from, to) and run them through the ledger (idempotent).
+ * A time budget keeps the call inside the serverless limit; returns next_page.
  */
 export async function importOrders({ from, to, page = 1, budgetMs = 50000 } = {}) {
   const started = Date.now();

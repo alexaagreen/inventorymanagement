@@ -1,6 +1,6 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// CSV for norsk Excel: UTF-8 med BOM, semikolon, desimalkomma.
+// CSV for Norwegian Excel: UTF-8 with BOM, semicolon, decimal comma. Cell values stay `ja`/`nei`.
 
 function cell(v) {
   if (v == null) return '';
@@ -8,7 +8,7 @@ function cell(v) {
   if (typeof v === 'boolean') return v ? 'ja' : 'nei';
   if (typeof v === 'object') v = JSON.stringify(v);
   let s = String(v);
-  // Tall som streng fra pg (numeric) → desimalkomma
+  // Numeric string from pg → decimal comma
   if (/^-?\d+\.\d+$/.test(s)) s = s.replace('.', ',');
   if (/[";\n\r]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
   return s;

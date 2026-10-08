@@ -1,4 +1,4 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, requireLines, requireParam } from '../../../../lib/inventory/handler';
 import { rpc } from '../../../../lib/inventory/rpc';
 

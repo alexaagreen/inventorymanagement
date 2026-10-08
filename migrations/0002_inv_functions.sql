@@ -1,20 +1,20 @@
--- inventory-ledger v0.1.0
+-- inventory-ledger v0.6.0
 -- =============================================================================
--- 0002_inv_functions.sql — kjernen: FIFO, dokumenter, reversering, vedlikehold
+-- 0002_inv_functions.sql — core: FIFO, documents, reversal, maintenance
 -- =============================================================================
--- Kilde: docs/spec.md §3–§5. All skriving går gjennom disse funksjonene.
+-- Source: docs/spec.md §3–§5. All writes go through these functions.
 --
--- Konvensjoner:
---   * Interne hjelpere har prefiks `_` og tar typede argumenter.
---   * Offentlige funksjoner tar/returnerer jsonb, slik at kontrakten er lik
---     fra pg (Next.js), supabase.rpc() og psql.
---   * Feil: RAISE med errcode P0001, message '<CODE>: <tekst>' og
---     detail = json. HTTP-laget mapper CODE → status (spec §6.0).
---   * Alle skrivinger låser inv.stock_balance-raden (item × location) FOR UPDATE.
+-- Conventions:
+--   * Internal helpers are prefixed with `_` and take typed arguments.
+--   * Public functions take and return jsonb, so the contract is the same
+--     from pg (Next.js), supabase.rpc() and psql.
+--   * Errors: RAISE with errcode P0001, message '<CODE>: <text>' and
+--     detail = json. The HTTP layer maps CODE → status (spec §6.0).
+--   * Every write locks the inv.stock_balance row (item × location) FOR UPDATE.
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
--- Feil og oppslag
+-- Errors and lookups
 -- ---------------------------------------------------------------------------
 create or replace function inv._raise(p_code text, p_message text, p_details jsonb default '{}')
 returns void language plpgsql as $$
@@ -72,7 +72,7 @@ language sql stable as $$ select sku from inv.item where id = p_item $$;
 create or replace function inv._loc_code(p_loc uuid) returns text
 language sql stable as $$ select code from inv.location where id = p_loc $$;
 
--- jsonb-hjelpere: tomme strenger behandles som null
+-- jsonb helpers: empty strings are treated as null
 create or replace function inv._jtext(p jsonb, k text) returns text
 language sql immutable as $$ select nullif(btrim(p ->> k), '') $$;
 
@@ -101,7 +101,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Saldo-lås og verdi
+-- Balance lock and value
 -- ---------------------------------------------------------------------------
 create or replace function inv._lock_balance(p_item uuid, p_loc uuid) returns inv.stock_balance
 language plpgsql as $$
@@ -113,7 +113,7 @@ begin
   return b;
 end $$;
 
--- Verdi = Σ faktiske lag (udekket konsum bidrar ikke).
+-- Value = Σ real layers (uncovered consumption does not contribute).
 create or replace function inv._layer_value(p_item uuid, p_loc uuid) returns numeric
 language sql stable as $$
   select coalesce(round(sum(qty_remaining * unit_cost), 2), 0)
@@ -135,9 +135,9 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Kostkilder (spec §3.3, §3.5)
+-- Cost sources (spec §3.3, §3.5)
 -- ---------------------------------------------------------------------------
--- Vektet snitt av lag med beholdning. p_loc null = alle lokasjoner.
+-- Weighted average of layers still on hand. p_loc null = every location.
 create or replace function inv._avg_layer_cost(p_item uuid, p_loc uuid) returns numeric
 language sql stable as $$
   select round(sum(qty_remaining * unit_cost) / nullif(sum(qty_remaining), 0), 4)
@@ -159,8 +159,8 @@ language sql stable as $$
   order by received_at desc, id desc limit 1
 $$;
 
--- Kostregel for inngående bevegelse uten oppgitt kost (spec §3.3 pkt 1–6).
--- Returnerer (unit_cost, cost_source). Kaster COST_REQUIRED hvis ingenting finnes.
+-- Cost rule for an inbound movement with no given cost (spec §3.3 items 1–6).
+-- Returns (unit_cost, cost_source). Raises COST_REQUIRED when nothing is found.
 create or replace function inv._resolve_in_cost(p_item uuid, p_loc uuid, p_given numeric,
   out unit_cost numeric, out cost_source text)
 language plpgsql stable as $$
@@ -181,7 +181,7 @@ begin
     jsonb_build_object('sku', inv._sku(p_item)));
 end $$;
 
--- Estimert kost for udekket konsum (spec §3.5). Faller tilbake til 0/unknown.
+-- Estimated cost for uncovered consumption (spec §3.5). Falls back to 0/unknown.
 create or replace function inv._estimate_cost(p_item uuid, p_avg_before numeric,
   out unit_cost numeric, out cost_source text)
 language plpgsql stable as $$
@@ -195,7 +195,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Idempotens på (ref_type, ref_id, ref_line)
+-- Idempotency on (ref_type, ref_id, ref_line)
 -- ---------------------------------------------------------------------------
 create or replace function inv._existing_ref(p_ref_type text, p_ref_id text, p_ref_line text) returns bigint
 language sql stable as $$
@@ -206,7 +206,7 @@ language sql stable as $$
 $$;
 
 -- ---------------------------------------------------------------------------
--- Dekking av udekket konsum når et nytt lag kommer inn (spec §3.5)
+-- Covering uncovered consumption when a new layer arrives (spec §3.5)
 -- ---------------------------------------------------------------------------
 create or replace function inv._cover_open_consumption(p_layer_id bigint, p_in_movement bigint) returns void
 language plpgsql as $$
@@ -231,7 +231,7 @@ begin
     v_out  := c.movement_id;
 
     if v_take < c.qty then
-      -- Delvis dekking: original rad beholder rest (fortsatt udekket)
+      -- Partial cover: the original row keeps the remainder (still uncovered)
       update inv.layer_consumption set qty = qty - v_take where id = c.id;
       insert into inv.layer_consumption (movement_id, layer_id, qty, unit_cost, estimated, covered_by_movement_id)
       values (v_out, l.id, v_take, l.unit_cost, false, p_in_movement);
@@ -248,7 +248,7 @@ begin
     l.qty_remaining := l.qty_remaining - v_take;
     update inv.cost_layer set qty_remaining = l.qty_remaining where id = l.id;
 
-    -- Rekalkuler kost på det opprinnelige uttaket
+    -- Recalculate cost on the original outbound movement
     update inv.movement m
        set total_cost = s.total,
            unit_cost = round(s.total / abs(m.qty), 4),
@@ -262,11 +262,11 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Kjernen: inngående bevegelse (oppretter lag)
+-- Core: inbound movement (creates layers)
 -- p_layers: [{qty, unit_cost, received_at?, source_layer_id?}].
--- p_unlayered_qty/cost: antall som legges til uten lag (kun reversering av
--- udekket konsum — beholdningen var negativ og nøytraliseres, ingen ny vare).
--- Bevegelsens antall = Σ lag + unlayered.
+-- p_unlayered_qty/cost: quantity added with no layer (only reversal of
+-- uncovered consumption — stock was negative and is neutralised, no new goods).
+-- Movement quantity = Σ layers + unlayered.
 -- ---------------------------------------------------------------------------
 create or replace function inv._post_in(
   p_item uuid, p_loc uuid, p_type inv.movement_type,
@@ -319,7 +319,7 @@ begin
     v_layers := v_layers || v_layer;
   end loop;
 
-  -- Dekk eventuelt udekket konsum (negativ beholdning) med de nye lagene, eldst-først.
+  -- Cover any uncovered consumption (negative stock) with the new layers, oldest first.
   foreach v_layer in array v_layers loop
     perform inv._cover_open_consumption(v_layer, v_id);
   end loop;
@@ -329,8 +329,8 @@ begin
   return v_id;
 end $$;
 
--- on_hand_after settes én gang (null → verdi) etter at saldoen er oppdatert.
--- Guarden tillater bare det når flagget under er satt i transaksjonen.
+-- on_hand_after is set once (null → value) after the balance has been updated.
+-- The guard allows that only when the flag below is set in the transaction.
 create or replace function inv._set_on_hand_after(p_id bigint, p_value numeric) returns void
 language plpgsql as $$
 begin
@@ -340,9 +340,9 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Kjernen: utgående bevegelse (FIFO-konsum)
--- p_only_movement_layers: konsumér KUN lagene opprettet av denne bevegelsen
--- (reversering av inngang). Krever at lagene er urørte.
+-- Core: outbound movement (FIFO consumption)
+-- p_only_movement_layers: consume ONLY the layers created by this movement
+-- (reversal of an inbound movement). Requires the layers to be untouched.
 -- ---------------------------------------------------------------------------
 create or replace function inv._post_out(
   p_item uuid, p_loc uuid, p_type inv.movement_type, p_qty numeric,
@@ -409,7 +409,7 @@ begin
         jsonb_build_object('movement_id', p_only_movement_layers, 'missing', v_rest));
     end if;
     if not p_allow_negative then
-      -- Skal ikke skje (sjekket over), men vær defensiv.
+      -- Should not happen (checked above), but be defensive.
       perform inv._raise('INSUFFICIENT_STOCK', 'not enough layers', jsonb_build_object('missing', v_rest));
     end if;
     select * into v_est from inv._estimate_cost(p_item, v_avg_before);
@@ -432,7 +432,7 @@ begin
   return v_id;
 end $$;
 
--- Guarden må tillate on_hand_after null → verdi når flagget er satt.
+-- The guard must allow on_hand_after null → value when the flag is set.
 create or replace function inv.movement_guard() returns trigger
 language plpgsql as $$
 begin
@@ -457,7 +457,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- JSON-presentasjon
+-- JSON presentation
 -- ---------------------------------------------------------------------------
 create or replace function inv._movement_json(p_id bigint) returns jsonb
 language sql stable as $$
@@ -489,7 +489,7 @@ language sql stable as $$
 $$;
 
 -- ---------------------------------------------------------------------------
--- Varer
+-- Items
 -- ---------------------------------------------------------------------------
 create or replace function inv.upsert_item(p jsonb) returns jsonb
 language plpgsql as $$
@@ -540,7 +540,7 @@ exception when unique_violation then
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Rå bevegelse (spec §5.2)
+-- Raw movement (spec §5.2)
 -- ---------------------------------------------------------------------------
 create or replace function inv.post_movement(p jsonb) returns jsonb
 language plpgsql as $$
@@ -597,7 +597,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Justering (spec §3.3, §5.4)
+-- Adjustment (spec §3.3, §5.4)
 -- ---------------------------------------------------------------------------
 create or replace function inv._adjustment_json(p_id uuid) returns jsonb
 language sql stable as $$
@@ -618,8 +618,8 @@ language sql stable as $$
   where a.id = p_id
 $$;
 
--- Felles logikk for create_adjustment og preview. p_commit=false skriver ingenting
--- (kjøres i en savepoint som rulles tilbake av preview-wrapperen).
+-- Shared logic for create_adjustment and preview. p_commit=false writes nothing
+-- (runs inside a savepoint that the preview wrapper rolls back).
 create or replace function inv.create_adjustment(p jsonb) returns jsonb
 language plpgsql as $$
 declare
@@ -673,14 +673,14 @@ begin
       perform inv._raise('VALIDATION', 'new_qty cannot be negative', jsonb_build_object('line', v_pos));
     end if;
 
-    b := inv._lock_balance(v_item, v_loc);   -- låst FØR delta beregnes (T18)
+    b := inv._lock_balance(v_item, v_loc);   -- locked BEFORE delta is computed (T18)
 
     insert into inv.adjustment_line (adjustment_id, position, item_id, qty_before, qty_delta, qty_after, note)
     values (v_adj, v_pos, v_item, b.on_hand, 0, b.on_hand, inv._jtext(e, 'note'))
     returning id into v_line;
 
     if v_reval is not null then
-      -- Revaluering: ut alt til FIFO-kost, inn igjen med ny kost (spec §3.3)
+      -- Revaluation: out everything at FIFO cost, back in at the new cost (spec §3.3)
       if b.on_hand <= 0 then
         perform inv._raise('VALIDATION', 'cannot revalue an item with no stock on this location',
           jsonb_build_object('line', v_pos, 'sku', inv._sku(v_item)));
@@ -721,13 +721,13 @@ begin
              unit_cost = m.unit_cost, cost_source = 'fifo', movement_id = v_mid
         from inv.movement m where m.id = v_mid and l.id = v_line;
     end if;
-    -- delta = 0: linjen står med movement_id null
+    -- delta = 0: the line is stored with movement_id null
   end loop;
 
   return inv._adjustment_json(v_adj);
 end $$;
 
--- Forhåndsvisning: kjør create_adjustment og rull tilbake (sekvenser brukes, men ingenting lagres).
+-- Preview: run create_adjustment and roll back (sequences are consumed, nothing is stored).
 create or replace function inv.preview_adjustment(p jsonb) returns jsonb
 language plpgsql as $$
 declare v jsonb;
@@ -742,7 +742,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Overføring (spec §3.6)
+-- Transfer (spec §3.6)
 -- ---------------------------------------------------------------------------
 create or replace function inv._transfer_json(p_id uuid) returns jsonb
 language sql stable as $$
@@ -797,7 +797,7 @@ begin
       perform inv._raise('VALIDATION', 'qty must be > 0', jsonb_build_object('line', v_pos));
     end if;
 
-    -- Lås begge saldoer i fast rekkefølge for å unngå deadlock
+    -- Lock both balances in a fixed order to avoid deadlock
     if v_from < v_to then
       perform inv._lock_balance(v_item, v_from); perform inv._lock_balance(v_item, v_to);
     else
@@ -810,7 +810,7 @@ begin
     v_out := inv._post_out(v_item, v_from, 'transfer_out', v_qty, false,
       'transfer', v_tr::text, v_line::text || ':out', v_number, inv._jtext(p, 'note'), v_by, v_at, null);
 
-    -- Hvert konsumerte lag gjenskapes på mottakssiden med samme kost og received_at
+    -- Each consumed layer is recreated on the destination with the same cost and received_at
     select jsonb_agg(jsonb_build_object('qty', c.qty, 'unit_cost', c.unit_cost,
                                         'received_at', cl.received_at, 'source_layer_id', cl.id) order by c.id)
       into v_layers
@@ -828,7 +828,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Innkjøp (spec §5.3)
+-- Purchasing (spec §5.3)
 -- ---------------------------------------------------------------------------
 create or replace function inv._po_json(p_id uuid) returns jsonb
 language sql stable as $$
@@ -1123,7 +1123,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Salg og retur utenom Woo (spec §5.4)
+-- Sales and returns outside Woo (spec §5.4)
 -- ---------------------------------------------------------------------------
 create or replace function inv.record_sale(p jsonb) returns jsonb
 language plpgsql as $$
@@ -1158,7 +1158,7 @@ begin
   return jsonb_build_object('movements', v_out);
 end $$;
 
--- Vektet COGS for en vare på et gitt salg (alle linjer) — brukes som returkost (spec §3.8).
+-- Weighted COGS for an item on a given sale (all lines) — used as the return cost (spec §3.8).
 create or replace function inv._sale_unit_cost(p_item uuid, p_ref_type text, p_ref_id text, p_ref_line text default null)
 returns numeric language sql stable as $$
   select round(sum(total_cost) / nullif(sum(abs(qty)), 0), 4)
@@ -1213,7 +1213,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Reversering (spec §3.7)
+-- Reversal (spec §3.7)
 -- ---------------------------------------------------------------------------
 create or replace function inv._reverse(p_id bigint, p_by text, p_note text) returns bigint
 language plpgsql as $$
@@ -1236,7 +1236,7 @@ begin
   end if;
 
   if m.qty > 0 then
-    -- Inngang: ta ut nøyaktig lagene denne bevegelsen skapte (må være urørte)
+    -- Inbound: take out exactly the layers this movement created (they must be untouched)
     if exists (select 1 from inv.cost_layer where movement_id = m.id and qty_remaining < qty_in) then
       perform inv._raise('LAYER_CONSUMED',
         'stock from this movement has already been sold or moved — post an adjustment instead',
@@ -1247,9 +1247,9 @@ begin
       jsonb_build_object('reversal_of_type', m.type), m.id, m.id);
   else
     perform inv._lock_balance(m.item_id, m.location_id);
-    -- Utgang: dekket konsum gir lagene tilbake (samme kost og received_at);
-    -- udekket konsum gjenopprettes ikke som lag — det lukkes, og beholdningen
-    -- nøytraliseres med tilsvarende antall uten lag.
+    -- Outbound: covered consumption restores the layers (same cost and received_at);
+    -- uncovered consumption is not restored as a layer — it is closed, and the balance
+    -- is neutralised with the same quantity and no layer.
     select coalesce(sum(qty), 0), coalesce(sum(qty * unit_cost), 0) into v_open_qty, v_open_cost
       from inv.layer_consumption where movement_id = m.id and layer_id is null and covered_by_movement_id is null;
 
@@ -1259,8 +1259,8 @@ begin
       from inv.layer_consumption c2 join inv.cost_layer cl on cl.id = c2.layer_id
      where c2.movement_id = m.id;
 
-    -- Lukk eget udekket konsum FØR lagene legges inn, så det ikke dekkes av
-    -- sine egne gjenopprettede lag. Original-id brukes midlertidig som markør.
+    -- Close this movement's own uncovered consumption BEFORE layers are inserted, so it is not covered by
+    -- its own restored layers. The original id is used temporarily as a marker.
     if v_open_qty > 0 then
       update inv.layer_consumption set covered_by_movement_id = m.id
        where movement_id = m.id and layer_id is null and covered_by_movement_id is null;
@@ -1285,7 +1285,7 @@ create or replace function inv.reverse_movement(p_movement_id bigint, p_by text 
 returns jsonb language plpgsql as $$
 declare v_id bigint;
 begin
-  -- Egen setning: _movement_json er STABLE og må se raden _reverse skrev.
+  -- Separate statement: _movement_json is STABLE and must see the row _reverse wrote.
   v_id := inv._reverse(p_movement_id, p_by, p_note);
   return inv._movement_json(v_id);
 end $$;
@@ -1346,7 +1346,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- Vedlikehold (spec §5.6)
+-- Maintenance (spec §5.6)
 -- ---------------------------------------------------------------------------
 create or replace function inv.rebuild_balances() returns jsonb
 language plpgsql as $$

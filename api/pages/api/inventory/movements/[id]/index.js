@@ -1,4 +1,4 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, requireParam } from '../../../../../lib/inventory/handler';
 import { getMovement } from '../../../../../lib/inventory/queries';
 import { InventoryError } from '../../../../../lib/inventory/errors';

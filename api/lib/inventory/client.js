@@ -1,9 +1,9 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// Klient-helper for UI (kun fetch — trygg i React, ingen server-importer).
+// Client helper for the UI (fetch only — safe in React, no server imports).
 //   const { data, next_cursor } = await inv('/movements?sku=KNIV-1&type=sale');
 //   await inv('/adjustments', { method: 'POST', body: {...}, idempotencyKey: newIdempotencyKey() });
-// Feil kastes som Error med { code, details, status }; bruk userMessage(err) fra ./errors for tekst.
+// Errors are thrown as Error with { code, details, status }; use userMessage(err) from ./errors for text.
 
 const BASE = '/api/inventory';
 
@@ -31,7 +31,7 @@ export async function inv(path, { method = 'GET', body, idempotencyKey, signal }
   return json;
 }
 
-/** Bygg querystring og dropp tomme verdier: qs({ sku: 'A', type: ['sale','sale_return'] }) */
+/** Build a query string and drop empty values: qs({ sku: 'A', type: ['sale','sale_return'] }) */
 export function qs(params = {}) {
   const u = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {

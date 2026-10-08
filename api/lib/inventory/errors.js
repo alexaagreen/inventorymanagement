@@ -1,7 +1,7 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// Feilkoder → HTTP-status (spec §6.0) og norsk brukertekst for UI.
-// Isomorf: ingen server-importer, trygg i React.
+// Error codes → HTTP status (spec §6.0) and user-facing text for the UI.
+// Norwegian copy lives in userMessage(err, 'no'). Isomorphic: no server imports, safe in React.
 
 export const STATUS_BY_CODE = {
   VALIDATION: 400,
@@ -36,7 +36,7 @@ export class InventoryError extends Error {
   }
 }
 
-/** Gjør en pg-feil fra inv._raise() (P0001 «CODE: tekst», detail=json) om til InventoryError. */
+/** Turn a pg error from inv._raise() (P0001 "CODE: text", detail=json) into an InventoryError. */
 export function fromPgError(err) {
   if (err instanceof InventoryError) return err;
   if (err && err.code === 'P0001') {
@@ -47,7 +47,7 @@ export function fromPgError(err) {
       return new InventoryError(m[1], m[2], details);
     }
   }
-  // Ugyldig input som Postgres selv avviser (uuid, tall, dato, enum)
+  // Invalid input that Postgres itself rejects (uuid, number, date, enum)
   if (err && ['22P02', '22007', '22008', '22003', '23502', '23514'].includes(err.code)) {
     return new InventoryError('VALIDATION', err.message, { pg_code: err.code });
   }
@@ -88,8 +88,8 @@ const TEXT = {
 };
 
 /**
- * Brukertekst for en feil fra API-et. `err` er { code, message, details }.
- * lang: 'no' (default) eller 'en'.
+ * User-facing text for an API error. `err` is { code, message, details }.
+ * lang: 'no' (default, for Norwegian UIs) or 'en'.
  */
 export function userMessage(err, lang = 'no') {
   const t = TEXT[lang] || TEXT.no;

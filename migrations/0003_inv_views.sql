@@ -1,6 +1,6 @@
--- inventory-ledger v0.1.0
+-- inventory-ledger v0.6.0
 -- =============================================================================
--- 0003_inv_views.sql — lesemodell (spec §2.12)
+-- 0003_inv_views.sql — read model (spec §2.12)
 -- =============================================================================
 
 create or replace view inv.v_stock_by_location as
@@ -102,7 +102,7 @@ join inv.item i on i.id = m.item_id
 join inv.location l on l.id = m.location_id
 where c.layer_id is null and c.covered_by_movement_id is null;
 
--- Status for én vare som jsonb (GET /stock/:sku)
+-- Status for one item as jsonb (GET /stock/:sku)
 create or replace function inv.get_item_status(p_sku text) returns jsonb
 language sql stable as $$
   select to_jsonb(s)

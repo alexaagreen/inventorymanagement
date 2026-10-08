@@ -1,11 +1,11 @@
--- inventory-ledger v0.5.0
+-- inventory-ledger v0.6.0
 -- =============================================================================
--- 0006_inv_grants.sql — `inv` er IKKE for nettleseren
+-- 0006_inv_grants.sql — `inv` is not for the browser
 -- =============================================================================
--- `inv` bor i nettbutikkens Supabase, der anon-nøkkelen er offentlig. Lageret skal
--- bare nås server-side (internal-web via INVENTORY_DATABASE_URL / service role).
--- Fjerner all tilgang for PUBLIC, anon og authenticated — også for fremtidige objekter.
--- Idempotent; tåler at Supabase-rollene ikke finnes (lokal Postgres / CI).
+-- `inv` lives in the storefront Supabase, where the anon key is public. Stock must
+-- only be reached server-side (internal-web via INVENTORY_DATABASE_URL / service role).
+-- Removes all access for PUBLIC, anon and authenticated — including future objects.
+-- Idempotent; tolerates missing Supabase roles (local Postgres / CI).
 -- =============================================================================
 
 revoke all on schema inv from public;

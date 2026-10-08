@@ -1,19 +1,40 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// Minimal WooCommerce REST-klient for ledgeren. Leser alt fra env — aldri hardkodede
-// URL-er eller nøkler (se butikkenes CLAUDE.md):
-//   WOOCOMMERCE_STORE_URL        f.eks. https://admin.skarpekniver.com
+// Minimal WooCommerce REST client for the ledger. Reads everything from env — never hardcoded
+// URLs or keys (see each shop's CLAUDE.md):
+//   WOOCOMMERCE_STORE_URL        e.g. https://admin.skarpekniver.com
 //   WOOCOMMERCE_CONSUMER_KEY / WOOCOMMERCE_CONSUMER_SECRET
-// Retry på 429/5xx/nettverksfeil med eksponentiell backoff.
+// Aliases, used when the WOOCOMMERCE_* names are unset (same as backend-handel/lib/woo.js):
+//   WC_API_URL / WC_CONSUMER_KEY / WC_CONSUMER_SECRET
+// Retries 429/5xx/network errors with exponential backoff.
 
 const TIMEOUT_MS = Number(process.env.INVENTORY_WOO_TIMEOUT_MS || 20000);
 
+function firstSet(...names) {
+  for (const name of names) {
+    const v = process.env[name];
+    if (v != null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+}
+
+function wooCredentials() {
+  // WC_API_URL is a store URL, same as WOOCOMMERCE_STORE_URL. Strip a trailing REST path if present.
+  const url = firstSet('WOOCOMMERCE_STORE_URL', 'WC_API_URL').replace(/\/$/, '').replace(/\/wp-json\/wc\/v3$/, '');
+  return {
+    url,
+    key: firstSet('WOOCOMMERCE_CONSUMER_KEY', 'WC_CONSUMER_KEY'),
+    secret: firstSet('WOOCOMMERCE_CONSUMER_SECRET', 'WC_CONSUMER_SECRET'),
+  };
+}
+
 function base() {
-  return (process.env.WOOCOMMERCE_STORE_URL || '').replace(/\/$/, '');
+  return wooCredentials().url;
 }
 
 export function wooConfigured() {
-  return Boolean(base() && process.env.WOOCOMMERCE_CONSUMER_KEY && process.env.WOOCOMMERCE_CONSUMER_SECRET);
+  const c = wooCredentials();
+  return Boolean(c.url && c.key && c.secret);
 }
 
 export class WooError extends Error {
@@ -26,9 +47,10 @@ export class WooError extends Error {
 }
 
 function url(path, params = {}) {
-  const u = new URL(`${base()}/wp-json/wc/v3${path}`);
-  u.searchParams.set('consumer_key', process.env.WOOCOMMERCE_CONSUMER_KEY || '');
-  u.searchParams.set('consumer_secret', process.env.WOOCOMMERCE_CONSUMER_SECRET || '');
+  const c = wooCredentials();
+  const u = new URL(`${c.url}/wp-json/wc/v3${path}`);
+  u.searchParams.set('consumer_key', c.key);
+  u.searchParams.set('consumer_secret', c.secret);
   for (const [k, v] of Object.entries(params)) if (v != null && v !== '') u.searchParams.set(k, String(v));
   return u;
 }
@@ -36,7 +58,7 @@ function url(path, params = {}) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function wooRequest(method, path, { params, body, retries = 3 } = {}) {
-  if (!wooConfigured()) throw new WooError(0, 'WooCommerce is not configured (WOOCOMMERCE_* env)');
+  if (!wooConfigured()) throw new WooError(0, 'WooCommerce is not configured (WOOCOMMERCE_* or WC_* env)');
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const ctrl = new AbortController();
@@ -68,7 +90,7 @@ export async function wooRequest(method, path, { params, body, retries = 3 } = {
 export const wooGet = (path, params) => wooRequest('GET', path, { params }).then((r) => r.data);
 export const wooPost = (path, body) => wooRequest('POST', path, { body }).then((r) => r.data);
 
-/** Hent alle sider (per_page 100). `onPage` kan brukes for strømming. */
+/** Fetch every page (per_page 100). */
 export async function wooGetAll(path, params = {}, { maxPages = 200 } = {}) {
   const out = [];
   for (let page = 1; page <= maxPages; page++) {

@@ -1,14 +1,14 @@
-// inventory-ledger v0.5.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// Kall en inv.*-funksjon og få jsonb tilbake. Feil fra inv._raise() blir InventoryError.
+// Call an inv.* function and get jsonb back. Errors from inv._raise() become InventoryError.
 //   await rpc('create_adjustment', body)
-//   await rpc('receive_purchase_order', [poId, body])     // flere argumenter
+//   await rpc('receive_purchase_order', [poId, body])     // several arguments
 import { query } from './db';
 import { fromPgError } from './errors';
 
 const NAME_RE = /^[a-z_][a-z0-9_]*$/;
 
-// Typer for argumenter som ikke er jsonb (resten sendes som jsonb)
+// Types for arguments that are not jsonb (the rest are sent as jsonb)
 const ARG_TYPES = {
   update_purchase_order: ['uuid', 'jsonb'],
   set_purchase_order_status: ['uuid', 'text', 'text'],
@@ -40,7 +40,7 @@ export async function rpc(fn, args = []) {
   }
 }
 
-/** Kjør vilkårlig parametrisert SQL med samme feilmapping (for lesespørringer). */
+/** Run arbitrary parameterized SQL with the same error mapping (for read queries). */
 export async function sql(text, params = []) {
   try {
     const { rows } = await query(text, params);
