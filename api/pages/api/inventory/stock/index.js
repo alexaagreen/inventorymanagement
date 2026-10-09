@@ -4,7 +4,7 @@ import { listStock } from '../../../../lib/inventory/queries';
 import { sendCsv } from '../../../../lib/inventory/csv';
 
 // GET /api/inventory/stock?sku=&skus=A,B&location=&negative=1&below_reorder=1&no_supplier=1&supplier_id=&q=&active=&limit=&cursor=&format=csv
-//   Rows also carry preferred_supplier, supplier_count and the last purchase (last_supplier, last_unit_cost,
+//   no_supplier=1 → tracked items without any supplier. Rows also carry preferred_supplier, supplier_count and the last purchase (last_supplier, last_unit_cost,
 //   last_currency, last_unit_cost_nok, last_po_number).
 export default route({
   GET: async (req, res, { query }) => {

@@ -77,7 +77,7 @@ export async function listStock({ skus, location, negative, below_reorder, no_su
   if (q) w.add('(s.sku ilike ? or s.name ilike ?)', `%${q}%`, `%${q}%`);
   if (negative) w.add('s.negative');
   if (below_reorder) w.add('s.below_reorder');
-  if (no_supplier) w.add('coalesce(pi.supplier_count, 0) = 0');
+  if (no_supplier) w.add('s.track_stock and coalesce(pi.supplier_count, 0) = 0'); // untracked (rental, bundles) need none
   if (supplier_id) w.add('exists (select 1 from inv.item_supplier x where x.item_id = s.item_id and x.supplier_id = ?::uuid)', supplier_id);
   if (active != null) w.add('s.active = ?', active);
   if (c) w.add('upper(s.sku) > ?', c.sku);
