@@ -1,4 +1,4 @@
-// inventory-ledger v0.7.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.8.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Ledger → Woo: push of available stock (outbox worker), reconcile, and
 // Woo → ledger: item sync (products/variations → inv.item).
@@ -31,19 +31,44 @@ async function markAll(rows, ok, error) {
   }
 }
 
-/** Handle a Woo batch response: { update: [{ id, stock_quantity } | { id, error: {…} }] } */
+/** Handle a Woo batch response: { update: [{ id, stock_quantity, stock_status, manage_stock, … } | { id, error: {…} }] } */
 async function applyBatchResult(rows, result, idKey) {
   const byId = new Map((result?.update || []).map((u) => [String(u.id), u]));
   let pushed = 0; let failed = 0;
+  const mirror = [];
   for (const r of rows) {
     const u = byId.get(String(r[idKey]));
-    if (u && !u.error) { await rpc('mark_stock_pushed', [r.item_id, r.qty_to_push, true, null]); pushed++; }
-    else {
+    if (u && !u.error) {
+      await rpc('mark_stock_pushed', [r.item_id, r.qty_to_push, true, null]); pushed++;
+      mirror.push({
+        id: Number(u.id),
+        stock_quantity: typeof u.stock_quantity === 'number' ? u.stock_quantity : Number(r.qty_to_push),
+        stock_status: u.stock_status || null,
+        manage_stock: typeof u.manage_stock === 'boolean' ? u.manage_stock : true,
+      });
+    } else {
       const msg = u?.error ? `${u.error.code}: ${u.error.message}` : 'missing in batch response';
       await rpc('mark_stock_pushed', [r.item_id, r.qty_to_push, false, msg]); failed++;
     }
   }
-  return { pushed, failed };
+  const mirrored = await updateMirror(idKey === 'woo_variation_id' ? 'variations' : 'products', mirror);
+  return { pushed, failed, mirrored };
+}
+
+/**
+ * Write what Woo now holds straight into the storefront mirror (public.products /
+ * public.product_variations) so storefronts reading Supabase do not wait for the
+ * Woo → Supabase sync. Best effort: a mirror failure never fails the push.
+ */
+async function updateMirror(kind, rows) {
+  if (!rows.length) return 0;
+  try {
+    const r = await rpc('apply_mirror_stock', { [kind]: rows });
+    return Number(r?.[kind] || 0);
+  } catch (err) {
+    console.warn('[inventory] mirror stock update failed:', err.message);
+    return 0;
+  }
 }
 
 /**
@@ -63,12 +88,12 @@ export async function pushStock({ limit = 100 } = {}) {
     byParent.get(k).push(r);
   }
 
-  let pushed = 0; let failed = 0;
+  let pushed = 0; let failed = 0; let mirrored = 0;
   for (const part of chunk(simple, BATCH)) {
     try {
       const res = await wooPost('/products/batch', { update: part.map((r) => ({ id: r.woo_product_id, manage_stock: true, stock_quantity: Number(r.qty_to_push) })) });
       const o = await applyBatchResult(part, res, 'woo_product_id');
-      pushed += o.pushed; failed += o.failed;
+      pushed += o.pushed; failed += o.failed; mirrored += o.mirrored;
     } catch (err) {
       await markAll(part, false, err.message); failed += part.length;
     }
@@ -80,13 +105,13 @@ export async function pushStock({ limit = 100 } = {}) {
           update: part.map((r) => ({ id: r.woo_variation_id, manage_stock: true, stock_quantity: Number(r.qty_to_push) })),
         });
         const o = await applyBatchResult(part, res, 'woo_variation_id');
-        pushed += o.pushed; failed += o.failed;
+        pushed += o.pushed; failed += o.failed; mirrored += o.mirrored;
       } catch (err) {
         await markAll(part, false, err.message); failed += part.length;
       }
     }
   }
-  return { pushed, failed, skipped: 0 };
+  return { pushed, failed, skipped: 0, mirrored };
 }
 
 /**

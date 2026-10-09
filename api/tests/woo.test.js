@@ -76,6 +76,7 @@ describe('woo integration (mocked Woo)', () => {
     expect(mock.state.requests).toHaveLength(0);
   });
 
+
   it('pushStock: per-item error → failed + backoff, visible in status', async () => {
     await db(`select inv.post_movement('{"sku":"W-1","type":"adjustment_out","qty":-1}')`);
     mock.state.failIds.add(9001);
@@ -172,5 +173,38 @@ describe('woo integration (mocked Woo)', () => {
     const q = mock.state.requests.find((x) => x.path === '/orders');
     expect(q.query.modified_after).toBe('2026-10-01T00:00:00Z');
     expect(q.query.status).toBe('any');
+  });
+
+  it('pushStock writes what Woo saved into the storefront mirror (v0.8.0)', async () => {
+    await db(`create table public.products (id bigint primary key, name text, stock_quantity int,
+               stock_status text, source_payload jsonb not null default '{}')`);
+    await db(`create table public.product_variations (id bigint primary key, parent_id bigint, stock_quantity int,
+               stock_status text, source_payload jsonb not null default '{}')`);
+    try {
+      await db(`insert into public.products values (9001, 'Kniv 1', 0, 'out_of_stock', '{"manage_stock": false, "price": "100"}')`);
+      await db(`insert into public.product_variations values (9102, 9002, 0, 'out_of_stock', '{}')`);
+      await db(`select inv.post_movement('{"sku":"W-1","type":"adjustment_in","qty":200,"unit_cost":100}')`);
+      await db(`select inv.post_movement('{"sku":"W-2-1000","type":"adjustment_in","qty":1,"unit_cost":50}')`);
+      const r = await pushStock({ limit: 100 });
+      expect(r.pushed).toBe(2);
+      expect(r.mirrored).toBe(2);
+      const avail = async (sku) => Math.max(0, Math.floor(Number((await db('select available from inv.v_item_status where sku = $1', [sku]))[0].available)));
+      const a1 = await avail('W-1');
+      const a2 = await avail('W-2-1000');
+      expect(a1).toBeGreaterThan(0);
+      const [p] = await db('select stock_quantity, stock_status, source_payload from public.products where id = 9001');
+      expect(p).toMatchObject({ stock_quantity: a1, stock_status: a1 > 0 ? 'in_stock' : 'out_of_stock' });
+      expect(p.source_payload).toMatchObject({ manage_stock: true, stock_quantity: a1, price: '100' });
+      const [v] = await db('select stock_quantity, stock_status from public.product_variations where id = 9102');
+      expect(v).toMatchObject({ stock_quantity: a2, stock_status: a2 > 0 ? 'in_stock' : 'out_of_stock' });
+      // switched off per shop
+      await db(`update inv.settings set value = 'false' where key = 'mirror_stock_update'`);
+      await db(`select inv.post_movement('{"sku":"W-1","type":"adjustment_in","qty":1,"unit_cost":100}')`);
+      expect((await pushStock({ limit: 100 })).mirrored).toBe(0);
+      expect((await db('select stock_quantity from public.products where id = 9001'))[0].stock_quantity).toBe(a1);
+    } finally {
+      await db(`update inv.settings set value = 'true' where key = 'mirror_stock_update'`);
+      await db('drop table if exists public.product_variations, public.products');
+    }
   });
 });

@@ -38,8 +38,10 @@ export function startWooMock() {
           const target = path === '/products/batch'
             ? state.products.find((p) => p.id === x.id)
             : Object.values(state.variations).flat().find((v) => v.id === x.id);
-          if (target) target.stock_quantity = x.stock_quantity;
-          return { id: x.id, stock_quantity: x.stock_quantity };
+          if (target) { target.stock_quantity = x.stock_quantity; target.manage_stock = x.manage_stock ?? target.manage_stock; }
+          // Like Woo: the response carries the saved object, incl. the derived stock_status.
+          return { id: x.id, stock_quantity: x.stock_quantity, manage_stock: x.manage_stock ?? true,
+                   stock_status: x.stock_quantity > 0 ? 'instock' : 'outofstock' };
         });
         return send(200, { update });
       }

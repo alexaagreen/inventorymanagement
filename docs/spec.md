@@ -491,6 +491,13 @@ første push.
 `track_stock=false` over i `apply_woo_order` og listes som `ignored_untracked` i svaret (ikke som `unmatched`). Brukes når
 samme Woo selger varer ledgeren ikke skal telle (utleie, tjenester). Standard `false` beholder T22-oppførselen.
 
+**Speilet oppdateres ved push (v0.8.0, migrasjon 0094).** Når push til Woo lykkes, skriver push-workeren det Woo
+svarte (`stock_quantity`, `stock_status`, `manage_stock`) rett inn i nettbutikkens speil (`public.products` /
+`public.product_variations`, også de samme nøklene i `source_payload`) via `inv.apply_mirror_stock`. Bare lagerfeltene
+røres; resten eies fortsatt av nettbutikkens sync, som senere skriver de samme verdiene. Woo-status mappes
+(`instock`→`in_stock` osv.). Feil her stopper aldri pushen. `inv.settings.mirror_stock_update='false'` slår det av.
+Merk: nettbutikkens egen side-cache (ISR) fornyes fortsatt av Woo-webhooken til sync-eieren.
+
 **Leverandører (v0.7.0, migrasjon 0093).** `inv.supplier` er leverandørregisteret. `inv.item_supplier` kobler varer og
 leverandører mange-til-mange (samme vare kan kjøpes flere steder) med `supplier_sku`, listepris/valuta, leveringstid,
 MOQ og **én `preferred` per vare** («hvem kjøper vi den fra»). En PO kobles til registeret via `supplier_uuid` — satt av

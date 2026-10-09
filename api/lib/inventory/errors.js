@@ -1,4 +1,4 @@
-// inventory-ledger v0.7.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.8.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Error codes → HTTP status (spec §6.0) and Norwegian/English user-facing text for the UI.
 // Isomorphic: no server imports, safe in React.
