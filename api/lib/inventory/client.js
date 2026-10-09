@@ -3,7 +3,8 @@
 // Client helper for the UI (fetch only — safe in React, no server imports).
 //   const { data, next_cursor } = await inv('/movements?sku=KNIV-1&type=sale');
 //   await inv('/adjustments', { method: 'POST', body: {...}, idempotencyKey: newIdempotencyKey() });
-// Errors are thrown as Error with { code, details, status }; use userMessage(err) from ./errors for text.
+// Errors are thrown as Error with { code, details, status, body }; use userMessage(err) from ./errors for text.
+// `body` is the parsed response — e.g. a 422 from an import carries { ok: false, errors: [...] } there.
 
 const BASE = '/api/inventory';
 
@@ -26,7 +27,7 @@ export async function inv(path, { method = 'GET', body, idempotencyKey, signal }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     const e = json?.error || {};
-    throw Object.assign(new Error(e.message || res.statusText), { code: e.code || 'HTTP_' + res.status, details: e.details || {}, status: res.status });
+    throw Object.assign(new Error(e.message || res.statusText), { code: e.code || 'HTTP_' + res.status, details: e.details || {}, status: res.status, body: json });
   }
   return json;
 }

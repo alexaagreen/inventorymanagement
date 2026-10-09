@@ -348,15 +348,15 @@ begin
     select id into v_item from inv.item where upper(sku) = upper(inv._jtext(r, 'sku'));
     v_sup := inv._find_supplier(v_ref);
     if inv._jtext(r, 'sku') is null then
-      v_errors := v_errors || jsonb_build_object('row', i, 'error', 'sku is required');
+      v_errors := v_errors || jsonb_build_object('row', i, 'message', 'sku is required');
     elsif v_item is null then
-      v_errors := v_errors || jsonb_build_object('row', i, 'sku', inv._jtext(r, 'sku'), 'error', 'unknown sku');
+      v_errors := v_errors || jsonb_build_object('row', i, 'sku', inv._jtext(r, 'sku'), 'message', 'unknown sku');
     elsif v_ref is null then
-      v_errors := v_errors || jsonb_build_object('row', i, 'sku', inv._jtext(r, 'sku'), 'error', 'supplier is required');
+      v_errors := v_errors || jsonb_build_object('row', i, 'sku', inv._jtext(r, 'sku'), 'message', 'supplier is required');
     elsif v_sup is null and not v_create then
-      v_errors := v_errors || jsonb_build_object('row', i, 'sku', inv._jtext(r, 'sku'), 'supplier', v_ref, 'error', 'unknown supplier');
+      v_errors := v_errors || jsonb_build_object('row', i, 'sku', inv._jtext(r, 'sku'), 'supplier', v_ref, 'message', 'unknown supplier');
     elsif coalesce((r->>'preferred')::boolean, false) and upper(inv._jtext(r, 'sku')) = any (v_pref_seen) then
-      v_errors := v_errors || jsonb_build_object('row', i, 'sku', inv._jtext(r, 'sku'), 'error', 'more than one preferred supplier for this sku');
+      v_errors := v_errors || jsonb_build_object('row', i, 'sku', inv._jtext(r, 'sku'), 'message', 'more than one preferred supplier for this sku');
     else
       if coalesce((r->>'preferred')::boolean, false) then v_pref_seen := v_pref_seen || upper(inv._jtext(r, 'sku')); end if;
       if v_sup is null and not (v_new_sup @> jsonb_build_array(lower(btrim(v_ref)))) then
