@@ -1,4 +1,4 @@
-// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.7.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Read queries for the list endpoints. No business logic — only filters,
 // sorting and keyset pagination over the views in schema `inv`.
@@ -59,7 +59,7 @@ export async function webhookLog({ limit = 50, result }) {
 }
 
 // ── Stock ──────────────────────────────────────────────────────────────────
-export async function listStock({ skus, location, negative, below_reorder, q, active, limit, cursor, all }) {
+export async function listStock({ skus, location, negative, below_reorder, no_supplier, supplier_id, q, active, limit, cursor, all }) {
   const w = new Where();
   const c = decodeCursor(cursor);
   if (location) {
@@ -73,18 +73,23 @@ export async function listStock({ skus, location, negative, below_reorder, q, ac
          from inv.v_stock_by_location ${w.sql} order by upper(sku) ${all ? '' : `limit ${limit + 1}`}`, w.params);
     return all ? { data: rows, next_cursor: null } : page(rows, limit, (r) => ({ sku: r.sku.toUpperCase() }));
   }
-  if (skus) w.add('upper(sku) = any(?)', skus.map((s) => s.toUpperCase()));
-  if (q) w.add('(sku ilike ? or name ilike ?)', `%${q}%`, `%${q}%`);
-  if (negative) w.add('negative');
-  if (below_reorder) w.add('below_reorder');
-  if (active != null) w.add('active = ?', active);
-  if (c) w.add('upper(sku) > ?', c.sku);
+  if (skus) w.add('upper(s.sku) = any(?)', skus.map((x) => x.toUpperCase()));
+  if (q) w.add('(s.sku ilike ? or s.name ilike ?)', `%${q}%`, `%${q}%`);
+  if (negative) w.add('s.negative');
+  if (below_reorder) w.add('s.below_reorder');
+  if (no_supplier) w.add('coalesce(pi.supplier_count, 0) = 0');
+  if (supplier_id) w.add('exists (select 1 from inv.item_supplier x where x.item_id = s.item_id and x.supplier_id = ?::uuid)', supplier_id);
+  if (active != null) w.add('s.active = ?', active);
+  if (c) w.add('upper(s.sku) > ?', c.sku);
   const rows = await sql(
-    `select sku, name, woo_product_id, woo_variation_id, track_stock, active,
-            on_hand, on_hand_sellable, allocated, available, on_order, next_delivery,
-            stock_value, avg_cost, last_purchase_cost, last_purchase_at, last_movement_at,
-            negative, below_reorder, reorder_point, open_consumption_qty, locations
-       from inv.v_item_status ${w.sql} order by upper(sku) ${all ? '' : `limit ${limit + 1}`}`, w.params);
+    `select s.sku, s.name, s.woo_product_id, s.woo_variation_id, s.track_stock, s.active,
+            s.on_hand, s.on_hand_sellable, s.allocated, s.available, s.on_order, s.next_delivery,
+            s.stock_value, s.avg_cost, s.last_purchase_cost, s.last_purchase_at, s.last_movement_at,
+            s.negative, s.below_reorder, s.reorder_point, s.open_consumption_qty, s.locations,
+            pi.preferred_supplier_id, pi.preferred_supplier, pi.preferred_supplier_sku, coalesce(pi.supplier_count, 0) as supplier_count,
+            pi.last_supplier_id, pi.last_supplier, pi.last_unit_cost, pi.last_currency, pi.last_unit_cost_nok, pi.last_po_number
+       from inv.v_item_status s left join inv.v_item_purchase_info pi on pi.item_id = s.item_id
+       ${w.sql} order by upper(s.sku) ${all ? '' : `limit ${limit + 1}`}`, w.params);
   return all ? { data: rows, next_cursor: null } : page(rows, limit, (r) => ({ sku: r.sku.toUpperCase() }));
 }
 
@@ -186,10 +191,11 @@ function docCursor(w, cursor) {
   if (c) w.add('(created_at, id) < (?::timestamptz, ?::uuid)', c.t, c.id);
 }
 
-export async function listPurchaseOrders({ statuses, supplier, q, from, to, limit, cursor }) {
+export async function listPurchaseOrders({ statuses, supplier, supplier_id, q, from, to, limit, cursor }) {
   const w = new Where();
   if (statuses) w.add('po.status::text = any(?)', statuses);
   if (supplier) w.add('po.supplier_name ilike ?', `%${supplier}%`);
+  if (supplier_id) w.add('po.supplier_uuid = ?::uuid', supplier_id);
   if (q) w.add('(po.number ilike ? or po.supplier_name ilike ? or po.supplier_ref ilike ? or exists (select 1 from inv.purchase_order_line l where l.po_id = po.id and l.sku ilike ?))',
     `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
   if (from) w.add('po.created_at >= ?', from);
@@ -197,7 +203,7 @@ export async function listPurchaseOrders({ statuses, supplier, q, from, to, limi
   const c = decodeCursor(cursor);
   if (c) w.add('(po.created_at, po.id) < (?::timestamptz, ?::uuid)', c.t, c.id);
   const rows = await sql(
-    `select po.id, po.number, po.status, po.supplier_name, po.supplier_ref, po.currency, po.fx_rate,
+    `select po.id, po.number, po.status, po.supplier_name, po.supplier_uuid, po.supplier_ref, po.currency, po.fx_rate,
             l.code as location, po.order_date, po.expected_at, po.created_by, po.created_at, po.sent_at, po.received_at,
             (select count(*)::int from inv.purchase_order_line x where x.po_id = po.id) as line_count,
             (select coalesce(sum(qty_ordered), 0) from inv.purchase_order_line x where x.po_id = po.id) as qty_ordered,
@@ -285,4 +291,33 @@ export async function getDoc(kind, id) {
   const fn = { adjustment: '_adjustment_json', transfer: '_transfer_json', receipt: '_receipt_json', po: '_po_json' }[kind];
   const rows = await sql(`select inv.${fn}($1::uuid) as d`, [id]);
   return rows[0]?.d || null;
+}
+
+// ── Suppliers ──────────────────────────────────────────────────────────────
+export async function listSuppliers({ q, active, limit, cursor }) {
+  const w = new Where();
+  if (q) w.add('(name ilike ? or code ilike ? or email ilike ?)', `%${q}%`, `%${q}%`, `%${q}%`);
+  if (active != null) w.add('active = ?', active);
+  const c = decodeCursor(cursor);
+  if (c) w.add('(lower(name), id) > (?, ?::uuid)', c.n, c.id);
+  const rows = await sql(
+    `select id, name, code, currency, contact_name, email, phone, website, default_lead_time_days, note, active,
+            item_count, preferred_count, open_po_count, last_receipt_at, created_at, updated_at
+       from inv.v_supplier ${w.sql} order by lower(name), id limit ${limit + 1}`, w.params);
+  return page(rows, limit, (r) => ({ n: r.name.toLowerCase(), id: r.id }));
+}
+
+export async function getSupplier(id) {
+  const [s] = await sql('select * from inv.v_supplier where id = $1::uuid', [id]);
+  if (!s) throw new InventoryError('SUPPLIER_NOT_FOUND', 'supplier not found', { supplier: id });
+  const items = await sql(
+    `select x.sku, i.name, x.preferred, x.supplier_sku, x.list_price, x.list_currency, x.lead_time_days, x.min_order_qty,
+            x.last_purchase_at, x.last_unit_cost, x.last_currency, x.last_unit_cost_nok, x.qty_purchased,
+            st.on_hand, st.available, i.active
+       from inv.v_item_supplier x join inv.item i on i.id = x.item_id join inv.v_item_status st on st.item_id = x.item_id
+      where x.supplier_id = $1::uuid order by upper(x.sku)`, [id]);
+  const purchase_orders = await sql(
+    `select id, number, status, currency, expected_at, created_at, received_at
+       from inv.purchase_order where supplier_uuid = $1::uuid order by created_at desc limit 20`, [id]);
+  return { ...s, items, purchase_orders };
 }

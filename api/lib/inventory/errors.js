@@ -1,4 +1,4 @@
-// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.7.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Error codes → HTTP status (spec §6.0) and Norwegian/English user-facing text for the UI.
 // Isomorphic: no server imports, safe in React.
@@ -9,6 +9,7 @@ export const STATUS_BY_CODE = {
   ITEM_NOT_FOUND: 404,
   LOCATION_NOT_FOUND: 404,
   PO_NOT_FOUND: 404,
+  SUPPLIER_NOT_FOUND: 404,
   NOT_FOUND: 404,
   METHOD_NOT_ALLOWED: 405,
   DUPLICATE_REF: 409,
@@ -69,6 +70,7 @@ const TEXT = {
     PO_STATUS_INVALID: () => 'Ugyldig statusendring for innkjøpsordren',
     ITEM_NOT_FOUND: (d) => `Fant ikke varen ${d.sku || ''}`.trim(),
     LOCATION_NOT_FOUND: (d) => `Fant ikke lokasjonen ${d.location || ''}`.trim(),
+    SUPPLIER_NOT_FOUND: (d) => `Fant ikke leverandøren ${d.supplier || ''}`.trim(),
     UNAUTHORIZED: () => 'Du er ikke logget inn',
     fallback: 'Noe gikk galt',
   },
@@ -84,6 +86,7 @@ const TEXT = {
     PO_STATUS_INVALID: () => 'That status change is not allowed for this purchase order',
     ITEM_NOT_FOUND: (d) => `Item ${d.sku || ''} not found`.replace('  ', ' '),
     LOCATION_NOT_FOUND: (d) => `Location ${d.location || ''} not found`.replace('  ', ' '),
+    SUPPLIER_NOT_FOUND: (d) => `Supplier ${d.supplier || ''} not found`.replace('  ', ' '),
     UNAUTHORIZED: () => 'You are not signed in',
     fallback: 'Something went wrong',
   },

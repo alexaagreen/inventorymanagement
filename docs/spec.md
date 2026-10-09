@@ -491,6 +491,23 @@ første push.
 `track_stock=false` over i `apply_woo_order` og listes som `ignored_untracked` i svaret (ikke som `unmatched`). Brukes når
 samme Woo selger varer ledgeren ikke skal telle (utleie, tjenester). Standard `false` beholder T22-oppførselen.
 
+**Leverandører (v0.7.0, migrasjon 0093).** `inv.supplier` er leverandørregisteret. `inv.item_supplier` kobler varer og
+leverandører mange-til-mange (samme vare kan kjøpes flere steder) med `supplier_sku`, listepris/valuta, leveringstid,
+MOQ og **én `preferred` per vare** («hvem kjøper vi den fra»). En PO kobles til registeret via `supplier_uuid` — satt av
+trigger fra `supplier_id` (register-uuid) eller `supplier_name` (case-insensitivt treff, opprettes hvis den mangler).
+Å bestille en vare fra en leverandør kobler dem automatisk; første kobling blir preferred. «Sist kjøpt fra» og «siste
+pris» lagres ikke, men avledes fra fullførte varemottak (`v_purchase_history`), så en reversering retter dem automatisk:
+`v_item_supplier` (per vare × leverandør) og `v_item_purchase_info` (per vare: preferred + siste kjøp). `get_item_status`
+returnerer `suppliers[]` og `purchase{}`; `/stock` har kolonnene og filtrene `no_supplier=1` / `supplier_id=`.
+```
+GET    /suppliers?q=&active=              POST /suppliers { name, code?, currency?, contact…, default_lead_time_days? }
+GET    /suppliers/:id                     → leverandør + items[] (siste pris herfra) + purchase_orders[]
+PATCH  /suppliers/:id
+POST   /suppliers/import                  { rows:[{ sku, supplier, supplier_sku?, preferred?, list_price?, … }], dry_run?, create_suppliers? }
+GET    /items/:sku/suppliers              POST { supplier, preferred?, supplier_sku?, list_price?, … }   DELETE ?supplier=
+POST   /purchase-orders                   { supplier_id? | supplier_name, … }
+```
+
 **Valuta (v0.5.1).** Ledgeren er alltid i NOK (`base_currency`); PO-er kan være i hvilken som helst valuta,
 og mottaket regner `unit_cost_base = unit_cost × fx_rate + landed_cost_per_unit`. `GET /fx/norges-bank`
 gir Norges Banks kurs (NOK per 1 enhet, siste virkedag på eller før `date`; per-100-noteringer som JPY,

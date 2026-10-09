@@ -1,4 +1,4 @@
-// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.7.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Minimal WooCommerce REST client for the ledger. Reads everything from env — never hardcoded
 // URLs or keys (see the shops' CLAUDE.md):

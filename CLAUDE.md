@@ -51,6 +51,7 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `migrations/0007_inv_opening_balance.sql` | `import_opening_balance` (dry run, alt-eller-ingenting, idempotent per SKU×lokasjon) |
 | `migrations/0091_inv_catalog_track_rules.sql` | v0.6.0: `track_stock_mode` (`woo_manage_stock`/`all`), `track_exclude_category_slugs`, bundles følges aldri — erstatter 0090-funksjonen |
 | `migrations/0092_inv_orders_skip_untracked.sql` | v0.6.0: `orders_skip_untracked` — ordrelinjer for varer med `track_stock=false` hoppes over (opt-in) |
+| `migrations/0093_inv_suppliers.sql` | v0.7.0: leverandørregister `inv.supplier`, `inv.item_supplier` (mange-til-mange, én preferred per vare), `purchase_order.supplier_uuid` (trigger), siste kjøp avledet fra mottak (`v_purchase_history`, `v_item_supplier`, `v_item_purchase_info`), bulk-import |
 | `migrations/0090_inv_catalog_adapter_storefront.sql` | `upsert_items_from_catalog()` fra nettbutikkens speil (felles for alle butikker) |
 | `scripts/install.mjs` | installerer i butikk: `--api`, `--migrations`, `--check`, `--dry-run`, `--force` |
 | `api/lib/inventory/config.example.js` | mal for butikkens `config.js` (NextAuth `getToken` / `getServerSession`) |
