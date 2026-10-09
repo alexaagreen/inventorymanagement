@@ -70,14 +70,26 @@ language sql immutable as $$
   select p ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 $$;
 
+-- text → uuid, or null when the text is not a uuid. Never raises.
+-- Always use this instead of `x::uuid` on free text (names, codes): SQL gives no
+-- short-circuit guarantee, and with low random_page_cost (Supabase: 1.1) the planner
+-- turns `id = $1::uuid` into a BitmapOr index condition that is evaluated before any
+-- `_is_uuid($1) and …` guard — "invalid input syntax for type uuid".
+create or replace function inv._to_uuid(p text) returns uuid
+language plpgsql immutable as $$
+begin
+  if inv._is_uuid(btrim(p)) then return btrim(p)::uuid; end if;
+  return null;
+end $$;
+
 -- Find a supplier by uuid, code or name (case-insensitive). Null when not found.
 create or replace function inv._find_supplier(p_ref text) returns uuid
 language sql stable as $$
   select s.id from inv.supplier s
-   where (inv._is_uuid(p_ref) and s.id = p_ref::uuid)
+   where s.id = inv._to_uuid(p_ref)
       or s.code = p_ref
       or lower(btrim(s.name)) = lower(btrim(p_ref))
-   order by (inv._is_uuid(p_ref) and s.id = p_ref::uuid) desc, (s.code = p_ref) desc
+   order by (s.id = inv._to_uuid(p_ref)) desc nulls last, (s.code = p_ref) desc nulls last
    limit 1
 $$;
 
@@ -127,8 +139,8 @@ begin
   if new.supplier_uuid is null
      or (tg_op = 'UPDATE' and new.supplier_name is distinct from old.supplier_name and new.supplier_uuid = old.supplier_uuid)
      or (tg_op = 'UPDATE' and new.supplier_id is distinct from old.supplier_id and inv._is_uuid(new.supplier_id)) then
-    if inv._is_uuid(new.supplier_id) and exists (select 1 from inv.supplier s where s.id = new.supplier_id::uuid) then
-      new.supplier_uuid := new.supplier_id::uuid;
+    if exists (select 1 from inv.supplier s where s.id = inv._to_uuid(new.supplier_id)) then
+      new.supplier_uuid := inv._to_uuid(new.supplier_id);
     else
       new.supplier_uuid := inv._ensure_supplier(new.supplier_name, new.currency);
     end if;
@@ -236,7 +248,7 @@ select s.*,
 --      default_lead_time_days?, note?, active? }   → supplier (create or update by id)
 create or replace function inv.upsert_supplier(p jsonb) returns jsonb
 language plpgsql as $$
-declare v uuid := case when inv._is_uuid(inv._jtext(p, 'id')) then inv._jtext(p, 'id')::uuid end;
+declare v uuid := inv._to_uuid(inv._jtext(p, 'id'));
 begin
   if v is null then
     if inv._jtext(p, 'name') is null then perform inv._raise('VALIDATION', 'name is required', '{"field":"name"}'); end if;

@@ -85,3 +85,29 @@ begin
   perform t.eq((select supplier_sku from inv.v_item_supplier where sku = 'SKI-C' and supplier_name = 'New Co'), 'NC-1', 'supplier sku from import');
   perform t.eq((select item_count from inv.v_supplier where name = 'Nordic Edge'), 1, 'supplier item count');
 end $$;
+
+-- Regression (majestyweb db push, 0093 backfill): names that are not uuids must never be
+-- cast. Supabase runs random_page_cost = 1.1, which makes the planner use a BitmapOr on
+-- supplier_pkey / code / name; force that plan here and look up by name, code and uuid.
+set enable_seqscan = off;
+do $$
+declare v uuid; po jsonb;
+begin
+  v := (inv.upsert_supplier('{"name":"MJST SPÓŁKA Z O.O.","currency":"PLN","code":"MJST"}')->>'id')::uuid;
+  perform t.eq(inv._find_supplier('MJST SPÓŁKA Z O.O.'), v, 'find by non-uuid name (index plan)');
+  perform t.eq(inv._find_supplier('  mjst spółka z o.o. '), v, 'find by name, any case/spacing');
+  perform t.eq(inv._find_supplier('MJST'), v, 'find by code');
+  perform t.eq(inv._find_supplier(upper(v::text)), v, 'find by uuid text');
+  perform t.ok(inv._find_supplier('not-a-uuid-0000') is null, 'unknown ref → null, no error');
+  perform t.ok(inv._to_uuid('MJST SPÓŁKA Z O.O.') is null, '_to_uuid never raises');
+  perform t.eq(inv._ensure_supplier('MJST SPÓŁKA Z O.O.', 'PLN'), v, 'ensure finds existing');
+  -- PO whose supplier_id holds a name (not a register uuid) resolves by supplier_name
+  po := inv.create_purchase_order('{"supplier_id":"MJST SPÓŁKA Z O.O.","supplier_name":"MJST SPÓŁKA Z O.O.","currency":"PLN","fx_rate":2.7,
+          "lines":[{"sku":"SKI-C","qty":1,"unit_cost":10}]}');
+  perform t.eq((select supplier_uuid from inv.purchase_order where id = (po->>'id')::uuid), v, 'PO with name in supplier_id');
+  -- the backfill statement itself, re-run over every PO
+  update inv.purchase_order set supplier_uuid = null;
+  update inv.purchase_order set supplier_uuid = inv._ensure_supplier(supplier_name, currency) where supplier_uuid is null;
+  perform t.eq((select count(*)::int from inv.purchase_order where supplier_uuid is null), 0, 'backfill resolves every PO');
+end $$;
+reset enable_seqscan;

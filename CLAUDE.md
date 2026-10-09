@@ -104,6 +104,9 @@ cd api && npm ci && npm test && npm run build
   og én-gangs-setting av `on_hand_after` er tillatt.
 - **Snapshot-fallgruve:** `STABLE`-funksjoner (f.eks. `_movement_json`) ser ikke rader
   skrevet i samme setning. Skriv først (`v_id := ...`), returner JSON i neste setning.
+- **Aldri `x::uuid` på fritekst** (navn, koder, refs) — heller ikke bak `_is_uuid(x) and …`: SQL kortslutter ikke, og med
+  Supabases `random_page_cost = 1.1` blir castet en BitmapOr-indeksbetingelse som evalueres først. Bruk `inv._to_uuid(x)`
+  (null hvis ikke uuid). Test oppslag med `set enable_seqscan = off`.
 - Migrasjoner er idempotente der det er praktisk og har header `-- inventory-ledger vX.Y.Z`.
 
 ## Woo-ordre i ledgeren (kort)
