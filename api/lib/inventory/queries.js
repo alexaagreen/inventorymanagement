@@ -1,4 +1,4 @@
-// inventory-ledger v0.8.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.9.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Read queries for the list endpoints. No business logic — only filters,
 // sorting and keyset pagination over the views in schema `inv`.
@@ -320,4 +320,60 @@ export async function getSupplier(id) {
     `select id, number, status, currency, expected_at, created_at, received_at
        from inv.purchase_order where supplier_uuid = $1::uuid order by created_at desc limit 20`, [id]);
   return { ...s, items, purchase_orders };
+}
+
+// ── Order reconcile (v0.9.0) ───────────────────────────────────────────────
+const RUN_COLS = `id, trigger, run_by, status, window_from, window_to, started_at, finished_at,
+  orders_checked, orders_changed, movements, missing_checked, issues_new, issues_seen, issues_resolved, issues_open, error,
+  (extract(epoch from (coalesce(finished_at, now()) - started_at)) * 1000)::bigint as duration_ms`;
+const ISSUE_STATUS = {
+  open: 'x.resolved_at is null',
+  resolved: "x.resolved_at is not null and x.resolution in ('auto', 'manual')",
+  ignored: "x.resolution = 'ignored'",
+  all: null,
+};
+
+export async function listOrderReconcileRuns({ status, limit, cursor }) {
+  const w = new Where();
+  if (status) w.add('status = any(?::text[])', status);
+  const c = decodeCursor(cursor);
+  if (c) w.add('(started_at, id) < (?::timestamptz, ?::uuid)', c.t, c.id);
+  const rows = await sql(`select ${RUN_COLS} from inv.order_reconcile_run ${w.sql}
+                           order by started_at desc, id desc limit ${limit + 1}`, w.params);
+  return page(rows, limit, (r) => ({ t: r.started_at, id: r.id }));
+}
+
+export async function getOrderReconcileRun(id) {
+  const [run] = await sql(`select ${RUN_COLS}, issue_ids, changes, log from inv.order_reconcile_run where id = $1::uuid`, [id]);
+  if (!run) throw new InventoryError('NOT_FOUND', 'reconcile run not found', { id });
+  const issues = await sql(
+    `select x.* from inv.order_reconcile_issue x where x.id = any($1::uuid[])
+      order by x.woo_order_id desc, x.kind, x.ref`, [run.issue_ids || []]);
+  const { issue_ids, ...rest } = run;
+  return { ...rest, issues };
+}
+
+export async function listOrderReconcileIssues({ status = 'open', kind, order, limit, cursor }) {
+  if (!(status in ISSUE_STATUS)) throw new InventoryError('VALIDATION', 'status must be open, resolved, ignored or all', { field: 'status' });
+  const w = new Where();
+  if (ISSUE_STATUS[status]) w.add(ISSUE_STATUS[status]);
+  if (kind) w.add('x.kind = any(?::text[])', kind);
+  if (order) w.add('(x.woo_order_id::text = ? or x.order_number = ?)', String(order).replace(/^#/, ''), String(order).replace(/^#/, ''));
+  const c = decodeCursor(cursor);
+  if (c) w.add('(x.last_seen_at, x.id) < (?::timestamptz, ?::uuid)', c.t, c.id);
+  const rows = await sql(`select x.* from inv.order_reconcile_issue x ${w.sql}
+                           order by x.last_seen_at desc, x.id desc limit ${limit + 1}`, w.params);
+  const out = page(rows, limit, (r) => ({ t: r.last_seen_at, id: r.id }));
+  const [counts] = await sql(`select count(*) filter (where resolved_at is null)::int as open,
+                                     count(*) filter (where resolution = 'ignored')::int as ignored
+                                from inv.order_reconcile_issue`);
+  return { ...out, counts };
+}
+
+export async function orderReconcileSummary() {
+  const [last] = await sql(`select ${RUN_COLS} from inv.order_reconcile_run order by started_at desc, id desc limit 1`);
+  const [lastOk] = await sql(`select finished_at from inv.order_reconcile_run where status in ('ok', 'issues')
+                               order by started_at desc limit 1`);
+  const [{ open }] = await sql('select count(*)::int as open from inv.order_reconcile_issue where resolved_at is null');
+  return { last_run: last || null, last_completed_at: lastOk?.finished_at || null, open_issues: open };
 }

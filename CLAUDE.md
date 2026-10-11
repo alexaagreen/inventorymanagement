@@ -54,11 +54,13 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `migrations/0093_inv_suppliers.sql` | v0.7.0: leverandørregister `inv.supplier`, `inv.item_supplier` (mange-til-mange, én preferred per vare), `purchase_order.supplier_uuid` (trigger), siste kjøp avledet fra mottak (`v_purchase_history`, `v_item_supplier`, `v_item_purchase_info`), bulk-import |
 | `migrations/0094_inv_mirror_stock.sql` | v0.8.0: `apply_mirror_stock` — push-workeren skriver Woos svar (stock_quantity/stock_status/manage_stock) rett inn i nettbutikkens speil (`public.products`/`product_variations`), så butikken ikke venter på sync. Setting `mirror_stock_update` (default `true`) |
 | `migrations/0095_inv_supplier_uuid_fix.sql` | v0.8.0: re-definerer `_to_uuid`/`_find_supplier`/`_po_resolve_supplier` uten uuid-cast på fritekst — retter databaser som kjørte original 0093 |
+| `migrations/0096_inv_order_reconcile.sql` | v0.9.0: ordre-avstemming — `order_reconcile_run` (logg, endringer, tellere per kjøring) og `order_reconcile_issue` (avvik med auto-/manuell lukking, ignore). `start/log/finish_order_reconcile`, `check_woo_order`. Spec §7.6 |
 | `migrations/0090_inv_catalog_adapter_storefront.sql` | `upsert_items_from_catalog()` fra nettbutikkens speil (felles for alle butikker) |
 | `scripts/install.mjs` | installerer i butikk: `--api`, `--migrations`, `--check`, `--dry-run`, `--force` |
 | `api/lib/inventory/config.example.js` | mal for butikkens `config.js` (NextAuth `getToken` / `getServerSession`) |
 | `api/lib/inventory/` | HTTP-laget: `db` (egen pool), `rpc` (inv.* → jsonb, feilmapping), `handler` (route-wrapper: auth, 405, Idempotency-Key, feil), `queries` (lister/keyset), `auth`, `errors` (kode→status + norsk brukertekst), `csv`, `client` (fetch-helper for UI), `config` (**butikk-spesifikk, overskrives ikke**) |
 | `api/lib/inventory/fx.js` | Norges Bank-kurs som referanse (`GET /fx/norges-bank`) — vises i UI, brukes aldri automatisk |
+| `api/lib/inventory/order-reconcile.js` | v0.9.0: `reconcileOrders()` — worker for ordre-avstemmingen (rutene `order-reconcile/**`, butikkens daglige cron) |
 | `api/lib/inventory/woo*.js` | `woo` (REST-klient, env-styrt, retry), `woo-push` (push-worker, `kickPush`, reconcile, item-sync), `woo-order` (HMAC-webhook, ordre+refusjon, backfill) |
 | `api/pages/api/inventory/**` | rutene i spec §6.1–6.6 (inkl. `webhooks/*`, `sync/*`, `items/sync`) |
 | `scripts/backfill-woo-orders.mjs` | backfill via API, følger `next_page` |

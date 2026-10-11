@@ -1,4 +1,4 @@
-// inventory-ledger v0.8.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.9.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Call an inv.* function and get jsonb back. Errors from inv._raise() become InventoryError.
 //   await rpc('create_adjustment', body)
@@ -25,6 +25,8 @@ const ARG_TYPES = {
   mark_stock_pushed: ['uuid', 'numeric', 'boolean', 'text'],
   enqueue_stock_push: ['text[]'],
   log_woo_webhook: ['text', 'text', 'text', 'text'],
+  log_order_reconcile: ['uuid', 'jsonb'],
+  order_missing_issue: ['bigint'],
 };
 
 export async function rpc(fn, args = []) {

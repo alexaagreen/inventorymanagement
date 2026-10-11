@@ -1,4 +1,4 @@
-// inventory-ledger v0.8.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.9.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Norges Bank exchange rates as a REFERENCE for the UI (shown next to the fx field on
 // purchase orders and receipts). Never applied automatically: the rate used for cost is

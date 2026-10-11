@@ -49,7 +49,12 @@ export function startWooMock() {
         const r = state.refunds[`${m[1]}:${m[2]}`];
         return r ? send(200, r) : send(404, { code: 'woocommerce_rest_invalid_id', message: 'Invalid ID.' });
       }
-      if (req.method === 'GET' && path === '/orders') return paged(state.orders);
+      // Like Woo: status=any lists everything except the trash; GET /orders/:id also returns trashed orders.
+      if (req.method === 'GET' && path === '/orders') return paged(state.orders.filter((o) => o.status !== 'trash'));
+      if (req.method === 'GET' && (m = /^\/orders\/(\d+)$/.exec(path))) {
+        const o = state.orders.find((x) => String(x.id) === m[1]);
+        return o ? send(200, o) : send(404, { code: 'woocommerce_rest_shop_order_invalid_id', message: 'Invalid ID.' });
+      }
       return send(404, { code: 'rest_no_route', message: 'No route' });
     });
   });

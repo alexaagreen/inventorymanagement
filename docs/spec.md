@@ -548,7 +548,13 @@ POST /webhooks/woo-product   product.created/updated/deleted → upsert_item (ka
 POST /sync/push-stock        Drener outbox (maks 100 per kjøring). Cron hvert minutt + trigges etter skriv. Svar { pushed, failed, skipped }.
 POST /sync/reconcile         Sammenligner Woo stock_quantity med available for alle track_stock-items; rapporterer avvik og (med ?fix=1) pusher. Daglig cron.
 POST /sync/import-orders?from=&to=   Backfill: henter ordrer fra Woo REST og kjører apply_woo_order per ordre (idempotent). Brukes ved oppstart og etter nedetid.
-GET  /sync/status            { queue_size, oldest_requested_at, last_push_at, failed_items:[…], last_reconcile }
+GET  /sync/status            { queue_size, oldest_requested_at, last_push_at, failed_items:[…], last_reconcile,
+                               order_reconcile: { last_run, last_completed_at, open_issues } }
+GET  /order-reconcile                 Kjøringer (nyeste først): status, vindu, tellere — uten logg  (v0.9.0, §7.6)
+POST /order-reconcile { days?, from?, to? }   Kjør nå (manuelt). 200 = ferdig kjøring m/ logg; 409 RECONCILE_RUNNING
+GET  /order-reconcile/:id             Én kjøring med log[], changes[] og issues[]
+GET  /order-reconcile/issues?status=open|resolved|ignored|all&kind=&order=
+PATCH /order-reconcile/issues/:id { action: resolve|ignore|reopen, note? }
 ```
 
 ---
@@ -587,6 +593,36 @@ Bruk `lib/woo.js` (`wooFetch`/`wooPost`) og env `WOOCOMMERCE_STORE_URL` / `_CONS
 
 ### 7.5 Reconcile
 Daglig: hent alle Woo-produkter/variasjoner med `manage_stock`, sammenlign `stock_quantity` mot `available`. Avvik rapporteres (Slack `#lager`) og rettes med `?fix=1` ved å legge item i push-køen — **aldri** ved å skrive Woo-verdien inn i ledgeren. Ledgeren er master.
+
+### 7.6 Ordre-avstemming (v0.9.0, migrasjon 0096)
+Webhook + backfill hvert 30. min (90 min vindu) er primærveien. Ordre-avstemmingen er sikkerhetsnettet: daglig cron
+(og «Run now» i UI) henter **alle** Woo-ordrer endret i vinduet (`status=any`, `modified_after`/`modified_before`), kjører
+hver gjennom `apply_woo_order` på nytt (idempotent — bare reelle forskjeller bokføres) og sammenligner Woo med ledgeren
+(`check_woo_order`). Ledger-ordrer som trakk lager, ble sist sett endret i vinduet og *ikke* kom med i listen, slås opp
+enkeltvis: 404 = slettet i Woo, `trash` = følger `restore_statuses` (lager tilbake).
+
+**Vindu:** siste `order_reconcile_days` (7), utvidet bakover til slutten av siste fullførte kjøring (fanger lange
+nedetider), maks `order_reconcile_max_days` (35). En kjøring som går tom for tid ender som `partial`; neste kjøring dekker resten.
+
+**Alt lagres i databasen** så UI kan vise det:
+- `inv.order_reconcile_run` — én rad per kjøring: `trigger` (cron/manual), `run_by`, `status`
+  (`running|ok|issues|partial|failed`), vindu, tellere, `log` (`[{at, level, message}]`, skrives fortløpende per side),
+  `changes` (ordrer der noe ble bokført), `issue_ids`, `error`. En kjøring som aldri ble ferdig lukkes som `failed`
+  av neste start (etter 30 min). Bare én kjøring om gangen (`RECONCILE_RUNNING` 409).
+- `inv.order_reconcile_issue` — avvik som krever et menneske. Én åpen rad per (kind, ordre, linje/refusjon); sett igjen →
+  `seen_count++`. Rettes ikke automatisk:
+
+| kind | betyr |
+|---|---|
+| `unmatched_sku` | ordrelinje uten vare i ledgeren — lager ble aldri trukket |
+| `line_mismatch` | ledgerens netto for en linje ≠ det Woo-ordren tilsier (skal ikke skje; tilstandsmaskinen har ikke konvergert) |
+| `refund_missing_in_woo` | ledgeren har bokført en refusjon som ikke lenger finnes i Woo (slettet) |
+| `order_missing_in_woo` | ledgeren har trukket for en ordre Woo ikke lenger har (slettet permanent) |
+| `apply_failed` | `apply_woo_order` feilet (melding i `details`) |
+
+Livsløp: en åpen sak for en ordre som avstemmes uten at saken rapporteres igjen → `resolution='auto'`. Manuelt
+`resolve` lukker (rapporteres som ny hvis problemet består); `ignore` lukker for godt (samme kind/ordre/ref rapporteres aldri
+igjen); `reopen` åpner igjen.
 
 ---
 

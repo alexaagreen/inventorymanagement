@@ -1,4 +1,4 @@
-// inventory-ledger v0.8.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.9.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, qLimit, qList, qDate, requireLines, requireParam } from '../../../../lib/inventory/handler';
 import { listPurchaseOrders } from '../../../../lib/inventory/queries';
 import { rpc, sql } from '../../../../lib/inventory/rpc';

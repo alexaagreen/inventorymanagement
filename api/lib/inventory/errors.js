@@ -1,4 +1,4 @@
-// inventory-ledger v0.8.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.9.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Error codes → HTTP status (spec §6.0) and Norwegian/English user-facing text for the UI.
 // Isomorphic: no server imports, safe in React.
@@ -16,6 +16,7 @@ export const STATUS_BY_CODE = {
   LAYER_CONSUMED: 409,
   PO_LOCKED: 409,
   ALREADY_REVERSED: 409,
+  RECONCILE_RUNNING: 409,
   IMMUTABLE: 409,
   INSUFFICIENT_STOCK: 422,
   COST_REQUIRED: 422,
@@ -71,6 +72,7 @@ const TEXT = {
     ITEM_NOT_FOUND: (d) => `Fant ikke varen ${d.sku || ''}`.trim(),
     LOCATION_NOT_FOUND: (d) => `Fant ikke lokasjonen ${d.location || ''}`.trim(),
     SUPPLIER_NOT_FOUND: (d) => `Fant ikke leverandøren ${d.supplier || ''}`.trim(),
+    RECONCILE_RUNNING: () => 'En ordreavstemming kjører allerede — vent til den er ferdig',
     UNAUTHORIZED: () => 'Du er ikke logget inn',
     fallback: 'Noe gikk galt',
   },
@@ -87,6 +89,7 @@ const TEXT = {
     ITEM_NOT_FOUND: (d) => `Item ${d.sku || ''} not found`.replace('  ', ' '),
     LOCATION_NOT_FOUND: (d) => `Location ${d.location || ''} not found`.replace('  ', ' '),
     SUPPLIER_NOT_FOUND: (d) => `Supplier ${d.supplier || ''} not found`.replace('  ', ' '),
+    RECONCILE_RUNNING: () => 'An order reconcile is already running — wait for it to finish',
     UNAUTHORIZED: () => 'You are not signed in',
     fallback: 'Something went wrong',
   },
