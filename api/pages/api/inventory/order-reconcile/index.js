@@ -1,4 +1,4 @@
-// inventory-ledger v0.9.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, qDate, qLimit, qList, withStatus } from '../../../../lib/inventory/handler';
 import { listOrderReconcileRuns } from '../../../../lib/inventory/queries';
 import { reconcileOrders } from '../../../../lib/inventory/order-reconcile';

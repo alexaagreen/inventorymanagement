@@ -1,4 +1,4 @@
-// inventory-ledger v0.9.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Read queries for the list endpoints. No business logic — only filters,
 // sorting and keyset pagination over the views in schema `inv`.
@@ -302,6 +302,7 @@ export async function listSuppliers({ q, active, limit, cursor }) {
   if (c) w.add('(lower(name), id) > (?, ?::uuid)', c.n, c.id);
   const rows = await sql(
     `select id, name, code, currency, contact_name, email, phone, website, default_lead_time_days, note, active,
+            order_unit, rules,
             item_count, preferred_count, open_po_count, last_receipt_at, created_at, updated_at
        from inv.v_supplier ${w.sql} order by lower(name), id limit ${limit + 1}`, w.params);
   return page(rows, limit, (r) => ({ n: r.name.toLowerCase(), id: r.id }));
@@ -311,7 +312,8 @@ export async function getSupplier(id) {
   const [s] = await sql('select * from inv.v_supplier where id = $1::uuid', [id]);
   if (!s) throw new InventoryError('SUPPLIER_NOT_FOUND', 'supplier not found', { supplier: id });
   const items = await sql(
-    `select x.sku, i.name, x.preferred, x.supplier_sku, x.list_price, x.list_currency, x.lead_time_days, x.min_order_qty,
+    `select x.sku, i.name, x.preferred, x.supplier_sku, x.pack_qty, x.pack_name, x.pack_gtin,
+            x.list_price, x.list_currency, x.lead_time_days, x.min_order_qty,
             x.last_purchase_at, x.last_unit_cost, x.last_currency, x.last_unit_cost_nok, x.qty_purchased,
             st.on_hand, st.available, i.active
        from inv.v_item_supplier x join inv.item i on i.id = x.item_id join inv.v_item_status st on st.item_id = x.item_id

@@ -1,4 +1,4 @@
-// inventory-ledger v0.9.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Dedicated pg pool for the database where schema `inv` lives.
 //   INVENTORY_DATABASE_URL — REQUIRED. Always points at the shop's (storefront's) Supabase,

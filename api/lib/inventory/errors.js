@@ -1,4 +1,4 @@
-// inventory-ledger v0.9.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Error codes → HTTP status (spec §6.0) and Norwegian/English user-facing text for the UI.
 // Isomorphic: no server imports, safe in React.
@@ -69,7 +69,9 @@ const TEXT = {
     ALREADY_REVERSED: () => 'Dette er allerede reversert',
     PO_LOCKED: () => 'Innkjøpsordren er låst for endringer',
     PO_STATUS_INVALID: () => 'Ugyldig statusendring for innkjøpsordren',
-    ITEM_NOT_FOUND: (d) => `Fant ikke varen ${d.sku || ''}`.trim(),
+    ITEM_NOT_FOUND: (d) => (d.supplier_sku || d.gtin) && !d.sku
+      ? `Leverandørvaren ${d.supplier_sku || d.gtin}${d.description ? ` (${d.description})` : ''} er ikke koblet til en av våre varer — velg SKU`
+      : `Fant ikke varen ${d.sku || ''}`.trim(),
     LOCATION_NOT_FOUND: (d) => `Fant ikke lokasjonen ${d.location || ''}`.trim(),
     SUPPLIER_NOT_FOUND: (d) => `Fant ikke leverandøren ${d.supplier || ''}`.trim(),
     RECONCILE_RUNNING: () => 'En ordreavstemming kjører allerede — vent til den er ferdig',
@@ -86,7 +88,9 @@ const TEXT = {
     ALREADY_REVERSED: () => 'This has already been reversed',
     PO_LOCKED: () => 'This purchase order is locked for changes',
     PO_STATUS_INVALID: () => 'That status change is not allowed for this purchase order',
-    ITEM_NOT_FOUND: (d) => `Item ${d.sku || ''} not found`.replace('  ', ' '),
+    ITEM_NOT_FOUND: (d) => (d.supplier_sku || d.gtin) && !d.sku
+      ? `Supplier item ${d.supplier_sku || d.gtin}${d.description ? ` (${d.description})` : ''} is not linked to one of our SKUs — choose the SKU`
+      : `Item ${d.sku || ''} not found`.replace('  ', ' '),
     LOCATION_NOT_FOUND: (d) => `Location ${d.location || ''} not found`.replace('  ', ' '),
     SUPPLIER_NOT_FOUND: (d) => `Supplier ${d.supplier || ''} not found`.replace('  ', ' '),
     RECONCILE_RUNNING: () => 'An order reconcile is already running — wait for it to finish',

@@ -522,6 +522,23 @@ SEK, DKK er regnet om) **kun som referanse** — UI-et viser den ved kursfeltet 
 fyller aldri inn eller bruker den automatisk. Kursen som brukes er alltid den en person skriver inn.
 `502 UPSTREAM` hvis Norges Bank ikke svarer.
 
+### 6.3.1 Leverandørregler og innkjøp i pakker (v0.10.0, migrasjon 0097)
+Mange leverandører fakturerer i pakker/kartonger, ikke i enhetene vi lagerfører. Nestlé: «LK DogDry Du/Sal&Ven (4x2,5kg)»
+antall 1 = én kartong med fire 2,5 kg-sekker → fire sekker på lager.
+
+- `supplier.rules` — huskeliste (array av tekster) per leverandør. Vises på innkjøpsordre og mottak, returneres av
+  `GET /suppliers/:id` og `match-lines` så agenter (grokbot) leser dem før de fører inn. `PATCH` tar array eller tekst (én regel per linje).
+- `supplier.order_unit` — `unit` | `pack`: hva leverandørens fakturaer teller i.
+- `item_supplier.pack_qty` (våre enheter per leverandørpakning, null = ukjent), `pack_name`, `pack_gtin` (pakningens GTIN, som på EHF).
+- PO-linje i pakker: `{ sku | supplier_sku | gtin, packs, pack_qty?, pack_price? | unit_cost, description? }` →
+  `qty = packs × pack_qty`, `unit_cost = pack_price / pack_qty`. `pack_qty`: linjens, ellers koblingens, ellers tolket fra
+  beskrivelsen («(4x2,5kg)» → 4, «(6x400g)» → 6, «(7kg)» → 1), ellers 1. Linjen lagrer `packs`, `pack_qty`, `supplier_sku`.
+  Artikkelnummer sammenlignes uten ledende nuller. Det en linje lærer (pack_qty, artikkelnr., GTIN) lagres på koblingen når
+  den ikke vet det fra før — neste faktura matcher av seg selv.
+- `POST /suppliers/:id/match-lines { lines:[{supplier_sku?, gtin?, description?, qty, net_amount? | unit_price?}] }` —
+  forhåndsviser en faktura uten å skrive: SKU, enheter, kost per enhet, og hva som mangler kobling. Matchede linjers
+  `po_line` kan postes uendret til `POST /purchase-orders`.
+
 ### 6.4 Justering og overføring
 ```
 GET  /adjustments?from=&to=&location=&reason=&by=&q=&limit=&cursor=      → liste med sum qty/verdi per dokument

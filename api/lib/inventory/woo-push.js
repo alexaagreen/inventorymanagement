@@ -1,4 +1,4 @@
-// inventory-ledger v0.9.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Ledger → Woo: push of available stock (outbox worker), reconcile, and
 // Woo → ledger: item sync (products/variations → inv.item).

@@ -1,4 +1,4 @@
-// inventory-ledger v0.9.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, requireUuid } from '../../../../lib/inventory/handler';
 import { getSupplier } from '../../../../lib/inventory/queries';
 import { rpc } from '../../../../lib/inventory/rpc';
