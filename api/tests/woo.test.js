@@ -56,7 +56,9 @@ describe('woo integration (mocked Woo)', () => {
     expect(Number(v.woo_variation_id)).toBe(9102);
     expect(v.name).toBe('Brynestein – #1000');
     expect(rows.find((x) => x.sku === 'W-2-6000').track_stock).toBe(false);
-    expect(rows.find((x) => x.sku === 'W-DRAFT').active).toBe(false);
+    // drafts are active (can be put on a purchase order) but never tracked (no stock push)
+    expect(rows.find((x) => x.sku === 'W-DRAFT').active).toBe(true);
+    expect(rows.find((x) => x.sku === 'W-DRAFT').track_stock).toBe(false);
   });
 
   it('pushStock: simple via products/batch, variation via parent batch (T19)', async () => {

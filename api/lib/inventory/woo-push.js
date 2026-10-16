@@ -1,11 +1,16 @@
 // inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
+// Item sync treats draft, pending and private Woo products as active (so they can be put on a
+// purchase order; trash stays inactive), and the auto path supplements the storefront mirror with
+// those statuses from Woo. Draft and pending stay untracked, so stock is never pushed for them.
+// (Upstreamed from bark-internal-web #3.)
+//
 // Ledger → Woo: push of available stock (outbox worker), reconcile, and
 // Woo → ledger: item sync (products/variations → inv.item).
 // The ledger is master: reconcile NEVER corrects the ledger from Woo — only the other way round.
-import { rpc, sql } from './rpc';
-import { wooConfigured, wooPost, wooGetAll, WooError } from './woo';
-import { inventoryConfig } from './config';
+import { rpc, sql } from './rpc.js';
+import { wooConfigured, wooPost, wooGetAll, WooError } from './woo.js';
+import { inventoryConfig } from './config.js';
 
 const BATCH = 100;
 
@@ -126,7 +131,13 @@ export function kickPush() {
 
 // ── Woo catalog ────────────────────────────────────────────────────────────
 
-const ACTIVE_STATUSES = new Set(['publish', 'private']);
+// Earlier versions only treated publish + private as active, so draft and pending products
+// never became usable inv.item rows and could not be put on a purchase order.
+const ACTIVE_STATUSES = new Set(['publish', 'private', 'draft', 'pending']);
+
+// Statuses the storefront mirror (public.products) does not carry. publish is
+// already applied by inv.upsert_items_from_catalog().
+const MIRROR_GAP_STATUSES = ['draft', 'pending', 'private'];
 
 function variationName(product, v) {
   const attrs = (v.attributes || []).map((a) => a.option).filter(Boolean).join(' / ');
@@ -171,33 +182,44 @@ function excludedByRoots(product, rules, roots) {
   return ids.every((id) => rules.exclude.includes(roots.get(id)));
 }
 
+/**
+ * Stock push only follows publish and private, which is what the worker already
+ * did. Draft and pending become active items (so they can be purchased) with
+ * track_stock false, and list_stock_push_due skips those.
+ */
+function pushesStock(status) {
+  return status === 'publish' || status === 'private';
+}
+
 /** Woo product (+ variations) → inv.item rows. */
 export function mapWooProduct(p, variations = [], rules = { mode: 'woo_manage_stock', exclude: [] }, roots = null) {
   const excluded = excludedByRoots(p, rules, roots);
   const track = (managed) => (excluded ? false : rules.mode === 'all' ? true : managed === true);
   if (p.type === 'variable') {
-    return variations.map((v) => ({
-      sku: v.sku || null,
-      woo_product_id: p.id,
-      woo_variation_id: v.id,
-      name: variationName(p, v),
-      // manage_stock 'parent' = stock is managed on the parent → not pushable per variation (woo_manage_stock mode)
-      track_stock: track(v.manage_stock),
-      active: ACTIVE_STATUSES.has(p.status) && ACTIVE_STATUSES.has(v.status || 'publish'),
-    }));
+    return variations.map((v) => {
+      const variationStatus = v.status || 'publish';
+      return {
+        sku: v.sku || null,
+        woo_product_id: p.id,
+        woo_variation_id: v.id,
+        name: variationName(p, v),
+        // manage_stock 'parent' = stock is managed on the parent → not pushable per variation (woo_manage_stock mode)
+        track_stock: pushesStock(p.status) && pushesStock(variationStatus) ? track(v.manage_stock) : false,
+        active: ACTIVE_STATUSES.has(p.status) && ACTIVE_STATUSES.has(variationStatus),
+      };
+    });
   }
   return [{
     sku: p.sku || null,
     woo_product_id: p.id,
     woo_variation_id: null,
     name: p.name,
-    track_stock: track(p.manage_stock),
+    track_stock: pushesStock(p.status) ? track(p.manage_stock) : false,
     active: ACTIVE_STATUSES.has(p.status),
   }];
 }
 
-async function fetchWooCatalog() {
-  const products = await wooGetAll('/products', { status: 'any' });
+async function catalogFromProducts(products) {
   const out = [];
   for (const p of products) {
     let variations = [];
@@ -207,23 +229,84 @@ async function fetchWooCatalog() {
   return out;
 }
 
+async function fetchWooCatalog() {
+  return catalogFromProducts(await wooGetAll('/products', { status: 'any' }));
+}
+
+/** Draft, pending and private products. One request per status so trash is never included. */
+async function fetchUnpublishedWooCatalog() {
+  const byId = new Map();
+  for (const status of MIRROR_GAP_STATUSES) {
+    const products = await wooGetAll('/products', { status });
+    for (const p of products) {
+      // Ignore anything the status query was not asked for, so a published row
+      // cannot be written again by this supplement.
+      if (p?.id == null || !MIRROR_GAP_STATUSES.includes(p.status) || byId.has(p.id)) continue;
+      byId.set(p.id, p);
+    }
+  }
+  return catalogFromProducts([...byId.values()]);
+}
+
+async function mapCatalogToItems(catalog) {
+  const rules = await getTrackRules();
+  const roots = rules.exclude.length ? await categoryRoots() : null;
+  return catalog.flatMap(({ product, variations }) => mapWooProduct(product, variations, rules, roots));
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+/**
+ * `deactivated` stays the catalog adapter's count. That pass sets gap items
+ * inactive because they are missing from the mirror; the supplement writes
+ * them active again in `unpublished`. Subtracting the two would hide a product
+ * that was really removed in the same run as a brand-new draft.
+ */
+function mergeCatalogSync(catalog, unpublished) {
+  const base = catalog && typeof catalog === 'object' ? catalog : {};
+  const extra = unpublished && typeof unpublished === 'object' ? unpublished : {};
+  return {
+    ...base,
+    upserted: Number(base.upserted || 0) + Number(extra.upserted || 0),
+    skipped: [...asArray(base.skipped), ...asArray(extra.skipped)],
+    unpublished: extra,
+  };
+}
+
 /**
  * Sync items. Prefers the shop's catalog adapter (inv.upsert_items_from_catalog,
  * reads the Supabase mirror), otherwise Woo REST directly.
+ *
+ * The mirror only holds published products, and the adapter upserts with
+ * deactivate_missing, so a draft that is not in public.products would be
+ * turned off. On the auto path those statuses are read from Woo first and
+ * upserted afterwards with deactivate_missing false: published rows are not
+ * written again, and the drafts stay active.
  */
 export async function syncItems({ source = 'auto' } = {}) {
   if (source !== 'woo') {
-    // The adapter (0090) reads the storefront mirror in the same database — use it when the mirror exists.
+    // The adapter (0090 / 0091) reads the storefront mirror in the same database — use it when the mirror exists.
     const [{ has }] = await sql(`select to_regprocedure('inv.upsert_items_from_catalog()') is not null
                                         and to_regclass('public.products') is not null as has`);
-    if (has) return { source: 'catalog_adapter', ...(await rpc('upsert_items_from_catalog', [])) };
+    if (has) {
+      if (source === 'auto' && wooConfigured()) {
+        // Map before the adapter. If Woo fails here, deactivate_missing has
+        // not run, so previously synced drafts stay active.
+        const items = await mapCatalogToItems(await fetchUnpublishedWooCatalog());
+        const catalog = await rpc('upsert_items_from_catalog', []);
+        const unpublished = items.length
+          ? await rpc('upsert_items', { items, deactivate_missing: false })
+          : { upserted: 0, deactivated: 0, skipped: [] };
+        return mergeCatalogSync(catalog, unpublished);
+      }
+      return { source: 'catalog_adapter', ...(await rpc('upsert_items_from_catalog', [])) };
+    }
     if (source === 'catalog') return { source: 'catalog_adapter', error: 'storefront mirror (public.products) not found in the inventory database' };
   }
   if (!wooConfigured()) throw new WooError(0, 'No catalog adapter and WooCommerce is not configured');
-  const catalog = await fetchWooCatalog();
-  const rules = await getTrackRules();
-  const roots = rules.exclude.length ? await categoryRoots() : null;
-  const items = catalog.flatMap(({ product, variations }) => mapWooProduct(product, variations, rules, roots));
+  const items = await mapCatalogToItems(await fetchWooCatalog());
   return { source: 'woo', ...(await rpc('upsert_items', { items, deactivate_missing: true })) };
 }
 
