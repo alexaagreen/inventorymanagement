@@ -1,8 +1,9 @@
 // inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
-import { route, requireUuid, withStatus } from '../../../../../lib/inventory/handler';
+import { route, withStatus } from '../../../../../lib/inventory/handler';
+import { resolveSupplierId } from '../../../../../lib/inventory/queries';
 import { rpc } from '../../../../../lib/inventory/rpc';
 
-// POST /api/inventory/suppliers/:id/match-lines — preview supplier invoice lines (no writes, v0.10.0)
+// POST /api/inventory/suppliers/:ref/match-lines (ref = uuid, code or name) — preview supplier invoice lines (no writes, v0.10.0)
 //   { qty_in?: 'pack' | 'unit' (default: the supplier's order_unit),
 //     lines: [{ supplier_sku?, gtin?, sku?, description?, qty, net_amount? | unit_price?, pack_qty? }] }
 //   → 200 { supplier, qty_in, rules[], matched, unmatched, total_net,
@@ -13,5 +14,5 @@ import { rpc } from '../../../../../lib/inventory/rpc';
 //   after that the supplier's article number or GTIN is enough.
 export default route({
   POST: async (req, res, { query, body }) => withStatus(200,
-    await rpc('match_supplier_lines', { ...body, supplier: requireUuid(query.id) })),
+    await rpc('match_supplier_lines', { ...body, supplier: await resolveSupplierId(query.id) })),
 }, { noPush: true });

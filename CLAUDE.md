@@ -62,6 +62,7 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `api/lib/inventory/` | HTTP-laget: `db` (egen pool), `rpc` (inv.* → jsonb, feilmapping), `handler` (route-wrapper: auth, 405, Idempotency-Key, feil), `queries` (lister/keyset), `auth`, `errors` (kode→status + norsk brukertekst), `csv`, `client` (fetch-helper for UI), `config` (**butikk-spesifikk, overskrives ikke**) |
 | `api/lib/inventory/fx.js` | Norges Bank-kurs som referanse (`GET /fx/norges-bank`) — vises i UI, brukes aldri automatisk |
 | `api/lib/inventory/order-reconcile.js` | v0.9.0: `reconcileOrders()` — worker for ordre-avstemmingen (rutene `order-reconcile/**`, butikkens daglige cron) |
+| `api/lib/inventory/agent-guide.js` | v0.10.0: guide for AI-agenter — `GET /api/inventory/guide` (JSON, `?format=md`). Hold den i takt med rutene |
 | `api/lib/inventory/woo*.js` | `woo` (REST-klient, env-styrt, retry), `woo-push` (push-worker, `kickPush`, reconcile, item-sync), `woo-order` (HMAC-webhook, ordre+refusjon, backfill) |
 | `api/pages/api/inventory/**` | rutene i spec §6.1–6.6 (inkl. `webhooks/*`, `sync/*`, `items/sync`) |
 | `scripts/backfill-woo-orders.mjs` | backfill via API, følger `next_page` |

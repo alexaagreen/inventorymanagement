@@ -574,6 +574,17 @@ GET  /order-reconcile/issues?status=open|resolved|ignored|all&kind=&order=
 PATCH /order-reconcile/issues/:id { action: resolve|ignore|reopen, note? }
 ```
 
+### 6.7 For AI-agenter (v0.10.0, kun lesing)
+Agenter (grokbot o.l.) bruker samme API med `Authorization: Bearer <INVENTORY_API_KEY>` og `x-inventory-by: <navn>`.
+- `GET /guide` (`?format=md`) — maskinlesbar oversikt: auth, konvensjoner, endepunkter, oppskrifter. Lim Markdown-versjonen inn i agentens instruks.
+- Leverandør kan adresseres med uuid, kode eller navn (case-insensitivt, URL-kodet) overalt der `:supplier` står.
+- `GET /suppliers/:supplier/items?from=&to=` — alle produkter fra leverandøren: lager, kobling (artikkelnr., pakning,
+  siste pris) og `period_summary` for perioden (standard siste 90 dager): `sold_net`, `received`, `adjusted`,
+  `net_change`, `cogs`, `movements`, `last_movement_at`.
+- `GET /suppliers/:supplier/movements` — bevegelser for alle leverandørens produkter.
+- `GET /items/:sku/movements?from=&to=` — ett produkt: lager, leverandører, `summary` for perioden og bevegelsene (nyeste først, paginert).
+Alle tre støtter `format=csv`.
+
 ---
 
 ## 7. Woo-integrasjon i detalj
