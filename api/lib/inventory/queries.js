@@ -1,4 +1,4 @@
-// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Read queries for the list endpoints. No business logic — only filters,
 // sorting and keyset pagination over the views in schema `inv`.
@@ -40,7 +40,7 @@ export async function listItems({ q, active, track_stock, limit, cursor }) {
   if (track_stock != null) w.add('i.track_stock = ?', track_stock);
   const c = decodeCursor(cursor);
   if (c) w.add('upper(i.sku) > ?', c.sku);
-  // Rows whose SKU starts with the query rank first (the SKU picker)
+  // Hits where the SKU starts with the search term first (SKU picker)
   const rank = q ? `case when upper(i.sku) = upper(${w.param(q)}) then 0 when i.sku ilike ${w.param(`${q}%`)} then 1 else 2 end,` : '';
   const rows = await sql(
     `select i.id, i.sku, i.name, i.woo_product_id, i.woo_variation_id, i.track_stock, i.active,
@@ -59,7 +59,7 @@ export async function webhookLog({ limit = 50, result }) {
 }
 
 // ── Stock ──────────────────────────────────────────────────────────────────
-export async function listStock({ skus, location, negative, below_reorder, q, active, limit, cursor, all }) {
+export async function listStock({ skus, location, negative, below_reorder, no_supplier, supplier_id, q, active, limit, cursor, all }) {
   const w = new Where();
   const c = decodeCursor(cursor);
   if (location) {
@@ -73,18 +73,23 @@ export async function listStock({ skus, location, negative, below_reorder, q, ac
          from inv.v_stock_by_location ${w.sql} order by upper(sku) ${all ? '' : `limit ${limit + 1}`}`, w.params);
     return all ? { data: rows, next_cursor: null } : page(rows, limit, (r) => ({ sku: r.sku.toUpperCase() }));
   }
-  if (skus) w.add('upper(sku) = any(?)', skus.map((s) => s.toUpperCase()));
-  if (q) w.add('(sku ilike ? or name ilike ?)', `%${q}%`, `%${q}%`);
-  if (negative) w.add('negative');
-  if (below_reorder) w.add('below_reorder');
-  if (active != null) w.add('active = ?', active);
-  if (c) w.add('upper(sku) > ?', c.sku);
+  if (skus) w.add('upper(s.sku) = any(?)', skus.map((x) => x.toUpperCase()));
+  if (q) w.add('(s.sku ilike ? or s.name ilike ?)', `%${q}%`, `%${q}%`);
+  if (negative) w.add('s.negative');
+  if (below_reorder) w.add('s.below_reorder');
+  if (no_supplier) w.add('s.track_stock and coalesce(pi.supplier_count, 0) = 0'); // untracked (rental, bundles) need none
+  if (supplier_id) w.add('exists (select 1 from inv.item_supplier x where x.item_id = s.item_id and x.supplier_id = ?::uuid)', supplier_id);
+  if (active != null) w.add('s.active = ?', active);
+  if (c) w.add('upper(s.sku) > ?', c.sku);
   const rows = await sql(
-    `select sku, name, woo_product_id, woo_variation_id, track_stock, active,
-            on_hand, on_hand_sellable, allocated, available, on_order, next_delivery,
-            stock_value, avg_cost, last_purchase_cost, last_purchase_at, last_movement_at,
-            negative, below_reorder, reorder_point, open_consumption_qty, locations
-       from inv.v_item_status ${w.sql} order by upper(sku) ${all ? '' : `limit ${limit + 1}`}`, w.params);
+    `select s.sku, s.name, s.woo_product_id, s.woo_variation_id, s.track_stock, s.active,
+            s.on_hand, s.on_hand_sellable, s.allocated, s.available, s.on_order, s.next_delivery,
+            s.stock_value, s.avg_cost, s.last_purchase_cost, s.last_purchase_at, s.last_movement_at,
+            s.negative, s.below_reorder, s.reorder_point, s.open_consumption_qty, s.locations,
+            pi.preferred_supplier_id, pi.preferred_supplier, pi.preferred_supplier_sku, coalesce(pi.supplier_count, 0) as supplier_count,
+            pi.last_supplier_id, pi.last_supplier, pi.last_unit_cost, pi.last_currency, pi.last_unit_cost_nok, pi.last_po_number
+       from inv.v_item_status s left join inv.v_item_purchase_info pi on pi.item_id = s.item_id
+       ${w.sql} order by upper(s.sku) ${all ? '' : `limit ${limit + 1}`}`, w.params);
   return all ? { data: rows, next_cursor: null } : page(rows, limit, (r) => ({ sku: r.sku.toUpperCase() }));
 }
 
@@ -111,6 +116,7 @@ export async function listMovements(f) {
     w.add('type::text = any(?)', types);
   }
   if (f.location) w.add('location = ?', String(f.location).toUpperCase());
+  if (f.supplier_id) w.add('exists (select 1 from inv.item_supplier x where x.item_id = v_movement.item_id and x.supplier_id = ?::uuid)', f.supplier_id);
   if (f.ref_type) w.add('ref_type = ?', f.ref_type);
   if (f.ref_id) w.add('ref_id = ?', String(f.ref_id));
   if (f.from) w.add('occurred_at >= ?', f.from);
@@ -171,7 +177,7 @@ export async function cogsReport({ from, to, group_by, location }) {
     from: from || null, to: to || null, group_by: group_by || 'sku',
     total_cogs: Math.round(total * 100) / 100,
     // Corrections booked in the period (estimated → actual cost). Already included
-    // in COGS for sales in the period; shown separately for period close.
+    // in cogs for sales in the period; shown separately for period close.
     corrections_booked_in_period: Number(corr.delta),
     rows,
   };
@@ -186,10 +192,11 @@ function docCursor(w, cursor) {
   if (c) w.add('(created_at, id) < (?::timestamptz, ?::uuid)', c.t, c.id);
 }
 
-export async function listPurchaseOrders({ statuses, supplier, q, from, to, limit, cursor }) {
+export async function listPurchaseOrders({ statuses, supplier, supplier_id, q, from, to, limit, cursor }) {
   const w = new Where();
   if (statuses) w.add('po.status::text = any(?)', statuses);
   if (supplier) w.add('po.supplier_name ilike ?', `%${supplier}%`);
+  if (supplier_id) w.add('po.supplier_uuid = ?::uuid', supplier_id);
   if (q) w.add('(po.number ilike ? or po.supplier_name ilike ? or po.supplier_ref ilike ? or exists (select 1 from inv.purchase_order_line l where l.po_id = po.id and l.sku ilike ?))',
     `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
   if (from) w.add('po.created_at >= ?', from);
@@ -197,7 +204,7 @@ export async function listPurchaseOrders({ statuses, supplier, q, from, to, limi
   const c = decodeCursor(cursor);
   if (c) w.add('(po.created_at, po.id) < (?::timestamptz, ?::uuid)', c.t, c.id);
   const rows = await sql(
-    `select po.id, po.number, po.status, po.supplier_name, po.supplier_ref, po.currency, po.fx_rate,
+    `select po.id, po.number, po.status, po.supplier_name, po.supplier_uuid, po.supplier_ref, po.currency, po.fx_rate,
             l.code as location, po.order_date, po.expected_at, po.created_by, po.created_at, po.sent_at, po.received_at,
             (select count(*)::int from inv.purchase_order_line x where x.po_id = po.id) as line_count,
             (select coalesce(sum(qty_ordered), 0) from inv.purchase_order_line x where x.po_id = po.id) as qty_ordered,
@@ -285,4 +292,179 @@ export async function getDoc(kind, id) {
   const fn = { adjustment: '_adjustment_json', transfer: '_transfer_json', receipt: '_receipt_json', po: '_po_json' }[kind];
   const rows = await sql(`select inv.${fn}($1::uuid) as d`, [id]);
   return rows[0]?.d || null;
+}
+
+// ── Suppliers ──────────────────────────────────────────────────────────────
+export async function listSuppliers({ q, active, limit, cursor }) {
+  const w = new Where();
+  if (q) w.add('(name ilike ? or code ilike ? or email ilike ?)', `%${q}%`, `%${q}%`, `%${q}%`);
+  if (active != null) w.add('active = ?', active);
+  const c = decodeCursor(cursor);
+  if (c) w.add('(lower(name), id) > (?, ?::uuid)', c.n, c.id);
+  const rows = await sql(
+    `select id, name, code, currency, contact_name, email, phone, website, default_lead_time_days, note, active,
+            order_unit, rules,
+            item_count, preferred_count, open_po_count, last_receipt_at, created_at, updated_at
+       from inv.v_supplier ${w.sql} order by lower(name), id limit ${limit + 1}`, w.params);
+  return page(rows, limit, (r) => ({ n: r.name.toLowerCase(), id: r.id }));
+}
+
+/** Supplier by uuid, code or name (case-insensitive) → uuid; SUPPLIER_NOT_FOUND otherwise. */
+export async function resolveSupplierId(ref) {
+  const r = String(ref ?? '').trim();
+  if (!r) throw new InventoryError('VALIDATION', 'supplier is required', { field: 'supplier' });
+  const [row] = await sql('select inv._find_supplier($1) as id', [r]);
+  if (!row?.id) throw new InventoryError('SUPPLIER_NOT_FOUND', 'supplier not found', { supplier: r });
+  return row.id;
+}
+
+export async function getSupplier(ref) {
+  const id = await resolveSupplierId(ref);
+  const [s] = await sql('select * from inv.v_supplier where id = $1::uuid', [id]);
+  if (!s) throw new InventoryError('SUPPLIER_NOT_FOUND', 'supplier not found', { supplier: id });
+  const items = await sql(
+    `select x.sku, i.name, x.preferred, x.supplier_sku, x.pack_qty, x.pack_name, x.pack_gtin,
+            x.list_price, x.list_currency, x.lead_time_days, x.min_order_qty,
+            x.last_purchase_at, x.last_unit_cost, x.last_currency, x.last_unit_cost_nok, x.qty_purchased,
+            st.on_hand, st.available, i.active
+       from inv.v_item_supplier x join inv.item i on i.id = x.item_id join inv.v_item_status st on st.item_id = x.item_id
+      where x.supplier_id = $1::uuid order by upper(x.sku)`, [id]);
+  const purchase_orders = await sql(
+    `select id, number, status, currency, expected_at, created_at, received_at
+       from inv.purchase_order where supplier_uuid = $1::uuid order by created_at desc limit 20`, [id]);
+  return { ...s, items, purchase_orders };
+}
+
+// ── Order reconcile (v0.9.0) ───────────────────────────────────────────────
+const RUN_COLS = `id, trigger, run_by, status, window_from, window_to, started_at, finished_at,
+  orders_checked, orders_changed, movements, missing_checked, issues_new, issues_seen, issues_resolved, issues_open, error,
+  (extract(epoch from (coalesce(finished_at, now()) - started_at)) * 1000)::bigint as duration_ms`;
+const ISSUE_STATUS = {
+  open: 'x.resolved_at is null',
+  resolved: "x.resolved_at is not null and x.resolution in ('auto', 'manual')",
+  ignored: "x.resolution = 'ignored'",
+  all: null,
+};
+
+export async function listOrderReconcileRuns({ status, limit, cursor }) {
+  const w = new Where();
+  if (status) w.add('status = any(?::text[])', status);
+  const c = decodeCursor(cursor);
+  if (c) w.add('(started_at, id) < (?::timestamptz, ?::uuid)', c.t, c.id);
+  const rows = await sql(`select ${RUN_COLS} from inv.order_reconcile_run ${w.sql}
+                           order by started_at desc, id desc limit ${limit + 1}`, w.params);
+  return page(rows, limit, (r) => ({ t: r.started_at, id: r.id }));
+}
+
+export async function getOrderReconcileRun(id) {
+  const [run] = await sql(`select ${RUN_COLS}, issue_ids, changes, log from inv.order_reconcile_run where id = $1::uuid`, [id]);
+  if (!run) throw new InventoryError('NOT_FOUND', 'reconcile run not found', { id });
+  const issues = await sql(
+    `select x.* from inv.order_reconcile_issue x where x.id = any($1::uuid[])
+      order by x.woo_order_id desc, x.kind, x.ref`, [run.issue_ids || []]);
+  const { issue_ids, ...rest } = run;
+  return { ...rest, issues };
+}
+
+export async function listOrderReconcileIssues({ status = 'open', kind, order, limit, cursor }) {
+  if (!(status in ISSUE_STATUS)) throw new InventoryError('VALIDATION', 'status must be open, resolved, ignored or all', { field: 'status' });
+  const w = new Where();
+  if (ISSUE_STATUS[status]) w.add(ISSUE_STATUS[status]);
+  if (kind) w.add('x.kind = any(?::text[])', kind);
+  if (order) w.add('(x.woo_order_id::text = ? or x.order_number = ?)', String(order).replace(/^#/, ''), String(order).replace(/^#/, ''));
+  const c = decodeCursor(cursor);
+  if (c) w.add('(x.last_seen_at, x.id) < (?::timestamptz, ?::uuid)', c.t, c.id);
+  const rows = await sql(`select x.* from inv.order_reconcile_issue x ${w.sql}
+                           order by x.last_seen_at desc, x.id desc limit ${limit + 1}`, w.params);
+  const out = page(rows, limit, (r) => ({ t: r.last_seen_at, id: r.id }));
+  const [counts] = await sql(`select count(*) filter (where resolved_at is null)::int as open,
+                                     count(*) filter (where resolution = 'ignored')::int as ignored
+                                from inv.order_reconcile_issue`);
+  return { ...out, counts };
+}
+
+export async function orderReconcileSummary() {
+  const [last] = await sql(`select ${RUN_COLS} from inv.order_reconcile_run order by started_at desc, id desc limit 1`);
+  const [lastOk] = await sql(`select finished_at from inv.order_reconcile_run where status in ('ok', 'issues')
+                               order by started_at desc limit 1`);
+  const [{ open }] = await sql('select count(*)::int as open from inv.order_reconcile_issue where resolved_at is null');
+  return { last_run: last || null, last_completed_at: lastOk?.finished_at || null, open_issues: open };
+}
+
+// ── Agent-friendly reads (v0.10.0) ─────────────────────────────────────────
+const DAY = 86400000;
+/** Period for movement summaries: [from, to), default the last 90 days. */
+export function period(from, to, days = 90) {
+  const t = to ? new Date(to) : new Date();
+  const f = from ? new Date(from) : new Date(t.getTime() - days * DAY);
+  if (Number.isNaN(t.getTime()) || Number.isNaN(f.getTime())) throw new InventoryError('VALIDATION', 'from/to must be dates', { field: 'from' });
+  if (f >= t) throw new InventoryError('VALIDATION', 'from must be before to', { field: 'from' });
+  return { from: f.toISOString(), to: t.toISOString() };
+}
+
+// Per item, inside [from, to): what moved. Quantities are in units (sale = negative qty in the ledger).
+//   sold_net = sold − returned; received = purchase receipts + opening balance; adjusted = adjustments + write-offs
+//   (signed); transferred_net is 0 for the item overall (it moves between locations); reversals = net qty of reversals.
+const SUMMARY_SQL = `
+  select m.item_id,
+         count(*)::int as movements,
+         coalesce(sum(m.qty) filter (where m.qty > 0), 0) as qty_in,
+         coalesce(-sum(m.qty) filter (where m.qty < 0), 0) as qty_out,
+         coalesce(-sum(m.qty) filter (where m.type in ('sale', 'sale_return')), 0) as sold_net,
+         coalesce(sum(m.qty) filter (where m.type in ('purchase_receipt', 'opening_balance')), 0) as received,
+         coalesce(sum(m.qty) filter (where m.type in ('adjustment_in', 'adjustment_out', 'write_off')), 0) as adjusted,
+         coalesce(sum(m.qty) filter (where m.type in ('transfer_in', 'transfer_out')), 0) as transferred_net,
+         coalesce(sum(m.qty) filter (where m.type = 'reversal'), 0) as reversals,
+         coalesce(sum(m.qty), 0) as net_change,
+         round(coalesce(sum(m.total_cost) filter (where m.type = 'sale'), 0)
+               - coalesce(sum(m.total_cost) filter (where m.type = 'sale_return'), 0), 2) as cogs,
+         max(m.occurred_at) as last_movement_at
+    from inv.movement m
+   where m.occurred_at >= $1::timestamptz and m.occurred_at < $2::timestamptz`;
+const EMPTY_SUMMARY = { movements: 0, qty_in: 0, qty_out: 0, sold_net: 0, received: 0, adjusted: 0, transferred_net: 0, reversals: 0, net_change: 0, cogs: 0, last_movement_at: null };
+
+/** All items bought from a supplier, with stock, the supplier link and a movement summary for the period. */
+export async function listSupplierItems(ref, { from, to, q, include_inactive = false } = {}) {
+  const id = await resolveSupplierId(ref);
+  const p = period(from, to);
+  const [s] = await sql(`select id, name, code, currency, order_unit, rules, default_lead_time_days, active from inv.supplier where id = $1::uuid`, [id]);
+  const params = [p.from, p.to, id];
+  let extra = '';
+  if (!include_inactive) extra += ' and i.active';
+  if (q) { params.push(`%${q}%`); extra += ` and (i.sku ilike $${params.length} or i.name ilike $${params.length} or x.supplier_sku ilike $${params.length})`; }
+  const rows = await sql(
+    `with mv as (${SUMMARY_SQL} and m.item_id in (select item_id from inv.item_supplier where supplier_id = $3::uuid) group by m.item_id)
+     select i.sku, i.name, i.active, i.track_stock, i.woo_product_id, i.woo_variation_id,
+            x.preferred, x.supplier_sku, x.pack_qty, x.pack_name, x.pack_gtin,
+            x.list_price, x.list_currency, x.lead_time_days, x.min_order_qty,
+            x.last_purchase_at, x.last_unit_cost, x.last_currency, x.last_unit_cost_nok, x.last_po_number, x.qty_purchased,
+            st.on_hand, st.available, st.allocated, st.on_order, st.next_delivery, st.avg_cost, st.stock_value,
+            st.reorder_point, st.below_reorder, st.negative, st.last_movement_at as last_movement_at_any,
+            to_jsonb(mv) - 'item_id' as period_summary
+       from inv.v_item_supplier x
+       join inv.item i on i.id = x.item_id
+       join inv.v_item_status st on st.item_id = x.item_id
+       left join mv on mv.item_id = x.item_id
+      where x.supplier_id = $3::uuid ${extra}
+      order by upper(i.sku)`, params);
+  for (const r of rows) r.period_summary = r.period_summary || { ...EMPTY_SUMMARY };
+  return { supplier: s, period: p, count: rows.length, data: rows };
+}
+
+/** One item: current stock, a movement summary for the period and the movements themselves (newest first). */
+export async function itemMovements(sku, f = {}) {
+  const [it] = await sql(
+    `select item_id, sku, name, active, track_stock, on_hand, available, allocated, on_order, next_delivery,
+            avg_cost, stock_value, last_purchase_cost, last_purchase_at, last_movement_at, locations
+       from inv.v_item_status where upper(sku) = upper($1)`, [sku]);
+  if (!it) throw new InventoryError('ITEM_NOT_FOUND', `item ${sku} not found`, { sku });
+  const p = period(f.from, f.to);
+  const [sum] = await sql(`select to_jsonb(s) as j from (${SUMMARY_SQL} and m.item_id = $3::uuid group by m.item_id) s`, [p.from, p.to, it.item_id]);
+  const suppliers = await sql(
+    `select supplier_id, supplier_name, preferred, supplier_sku, pack_qty, pack_name, last_purchase_at, last_unit_cost, last_currency
+       from inv.v_item_supplier where item_id = $1::uuid order by preferred desc, last_purchase_at desc nulls last`, [it.item_id]);
+  const list = await listMovements({ ...f, skus: [it.sku], from: f.from || p.from, to: f.to || p.to });
+  const { item_id, ...item } = it;
+  const { item_id: _x, ...summary } = sum?.j || { item_id: null, ...EMPTY_SUMMARY };
+  return { item: { ...item, suppliers }, period: p, summary, ...list };
 }

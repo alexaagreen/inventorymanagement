@@ -49,10 +49,20 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `migrations/0005_inv_api.sql` | `idempotency_key`, `list_locations` |
 | `migrations/0006_inv_grants.sql` | revoke alt for PUBLIC/anon/authenticated (inv er server-only) |
 | `migrations/0007_inv_opening_balance.sql` | `import_opening_balance` (dry run, alt-eller-ingenting, idempotent per SKU×lokasjon) |
+| `migrations/0091_inv_catalog_track_rules.sql` | v0.6.0: `track_stock_mode` (`woo_manage_stock`/`all`), `track_exclude_category_slugs`, bundles følges aldri — erstatter 0090-funksjonen |
+| `migrations/0092_inv_orders_skip_untracked.sql` | v0.6.0: `orders_skip_untracked` — ordrelinjer for varer med `track_stock=false` hoppes over (opt-in) |
+| `migrations/0093_inv_suppliers.sql` | v0.7.0: leverandørregister `inv.supplier`, `inv.item_supplier` (mange-til-mange, én preferred per vare), `purchase_order.supplier_uuid` (trigger), siste kjøp avledet fra mottak (`v_purchase_history`, `v_item_supplier`, `v_item_purchase_info`), bulk-import |
+| `migrations/0094_inv_mirror_stock.sql` | v0.8.0: `apply_mirror_stock` — push-workeren skriver Woos svar (stock_quantity/stock_status/manage_stock) rett inn i nettbutikkens speil (`public.products`/`product_variations`), så butikken ikke venter på sync. Setting `mirror_stock_update` (default `true`) |
+| `migrations/0095_inv_supplier_uuid_fix.sql` | v0.8.0: re-definerer `_to_uuid`/`_find_supplier`/`_po_resolve_supplier` uten uuid-cast på fritekst — retter databaser som kjørte original 0093 |
+| `migrations/0096_inv_order_reconcile.sql` | v0.9.0: ordre-avstemming — `order_reconcile_run` (logg, endringer, tellere per kjøring) og `order_reconcile_issue` (avvik med auto-/manuell lukking, ignore). `start/log/finish_order_reconcile`, `check_woo_order`. Spec §7.6 |
+| `migrations/0097_inv_supplier_rules_packs.sql` | v0.10.0: leverandørregler (`supplier.rules` — huskeliste vist på PO/mottak, lest av agenter), `supplier.order_unit` (`unit`/`pack`), pakninger på koblingen (`item_supplier.pack_qty/pack_name/pack_gtin`), PO-linjer i pakker (`packs`, `pack_price`, `supplier_sku`/`gtin` i stedet for `sku`), `match_supplier_lines` (faktura-forhåndsvisning). Spec §6.3.1 |
 | `migrations/0090_inv_catalog_adapter_storefront.sql` | `upsert_items_from_catalog()` fra nettbutikkens speil (felles for alle butikker) |
 | `scripts/install.mjs` | installerer i butikk: `--api`, `--migrations`, `--check`, `--dry-run`, `--force` |
 | `api/lib/inventory/config.example.js` | mal for butikkens `config.js` (NextAuth `getToken` / `getServerSession`) |
 | `api/lib/inventory/` | HTTP-laget: `db` (egen pool), `rpc` (inv.* → jsonb, feilmapping), `handler` (route-wrapper: auth, 405, Idempotency-Key, feil), `queries` (lister/keyset), `auth`, `errors` (kode→status + norsk brukertekst), `csv`, `client` (fetch-helper for UI), `config` (**butikk-spesifikk, overskrives ikke**) |
+| `api/lib/inventory/fx.js` | Norges Bank-kurs som referanse (`GET /fx/norges-bank`) — vises i UI, brukes aldri automatisk |
+| `api/lib/inventory/order-reconcile.js` | v0.9.0: `reconcileOrders()` — worker for ordre-avstemmingen (rutene `order-reconcile/**`, butikkens daglige cron) |
+| `api/lib/inventory/agent-guide.js` | v0.10.0: guide for AI-agenter — `GET /api/inventory/guide` (JSON, `?format=md`). Hold den i takt med rutene |
 | `api/lib/inventory/woo*.js` | `woo` (REST-klient, env-styrt, retry), `woo-push` (push-worker, `kickPush`, reconcile, item-sync), `woo-order` (HMAC-webhook, ordre+refusjon, backfill) |
 | `api/pages/api/inventory/**` | rutene i spec §6.1–6.6 (inkl. `webhooks/*`, `sync/*`, `items/sync`) |
 | `scripts/backfill-woo-orders.mjs` | backfill via API, følger `next_page` |
@@ -81,7 +91,10 @@ cd api && npm ci && npm test && npm run build
 - Webhook-rutene bruker ikke `route()` (rå body for HMAC, `bodyParser: false`) og må allowlistes i
   butikkens `middleware.js`. Fail-closed uten `WC_WEBHOOK_SECRET`.
 - Env: `INVENTORY_DATABASE_URL`, `INVENTORY_API_KEY` (kommaseparert liste tillatt), `WC_WEBHOOK_SECRET`,
-  `WOOCOMMERCE_STORE_URL`, `WOOCOMMERCE_CONSUMER_KEY`, `WOOCOMMERCE_CONSUMER_SECRET`.
+  `WOOCOMMERCE_STORE_URL`, `WOOCOMMERCE_CONSUMER_KEY`, `WOOCOMMERCE_CONSUMER_SECRET` (aliaser fra v0.6.0:
+  `WC_API_URL`, `WC_CONSUMER_KEY`, `WC_CONSUMER_SECRET`).
+- **Språk i `api/` og `scripts/`: engelsk** (fra v0.6.0) — kommentarer, logg- og feiltekster. Unntak: `no`-ordboka i
+  `errors.js` (norsk brukertekst) og API-verdier som `kind=salg`. Noen butikker (backend-handel) har English-only-regel.
 - Avhengigheter i butikken: kun `pg` (allerede i begge internal-webs). Ingen zod.
 
 ## Konvensjoner i SQL
@@ -96,6 +109,9 @@ cd api && npm ci && npm test && npm run build
   og én-gangs-setting av `on_hand_after` er tillatt.
 - **Snapshot-fallgruve:** `STABLE`-funksjoner (f.eks. `_movement_json`) ser ikke rader
   skrevet i samme setning. Skriv først (`v_id := ...`), returner JSON i neste setning.
+- **Aldri `x::uuid` på fritekst** (navn, koder, refs) — heller ikke bak `_is_uuid(x) and …`: SQL kortslutter ikke, og med
+  Supabases `random_page_cost = 1.1` blir castet en BitmapOr-indeksbetingelse som evalueres først. Bruk `inv._to_uuid(x)`
+  (null hvis ikke uuid). Test oppslag med `set enable_seqscan = off`.
 - Migrasjoner er idempotente der det er praktisk og har header `-- inventory-ledger vX.Y.Z`.
 
 ## Woo-ordre i ledgeren (kort)

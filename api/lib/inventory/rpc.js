@@ -1,8 +1,8 @@
-// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Call an inv.* function and get jsonb back. Errors from inv._raise() become InventoryError.
 //   await rpc('create_adjustment', body)
-//   await rpc('receive_purchase_order', [poId, body])     // several arguments
+//   await rpc('receive_purchase_order', [poId, body])     // multiple arguments
 import { query } from './db';
 import { fromPgError } from './errors';
 
@@ -18,12 +18,15 @@ const ARG_TYPES = {
   reverse_goods_receipt: ['uuid', 'text', 'text'],
   reverse_transfer: ['uuid', 'text', 'text'],
   get_item_status: ['text'],
+  list_item_suppliers: ['text'],
   apply_woo_order: ['jsonb', 'text'],
   apply_woo_refund: ['bigint', 'jsonb'],
   list_stock_push_due: ['int'],
   mark_stock_pushed: ['uuid', 'numeric', 'boolean', 'text'],
   enqueue_stock_push: ['text[]'],
   log_woo_webhook: ['text', 'text', 'text', 'text'],
+  log_order_reconcile: ['uuid', 'jsonb'],
+  order_missing_issue: ['bigint'],
 };
 
 export async function rpc(fn, args = []) {

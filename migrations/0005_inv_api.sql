@@ -1,9 +1,9 @@
--- inventory-ledger v0.6.0
+-- inventory-ledger v0.3.0
 -- =============================================================================
--- 0005_inv_api.sql — support for the HTTP layer (spec §6.0)
+-- 0005_inv_api.sql — støtte for HTTP-laget (spec §6.0)
 -- =============================================================================
 
--- Idempotency-Key: the same key → the same response for 24 h
+-- Idempotency-Key: samme nøkkel → samme svar i 24 t
 create table if not exists inv.idempotency_key (
   key         text primary key,
   method      text not null,
@@ -23,7 +23,7 @@ begin
   return n;
 end $$;
 
--- Locations as jsonb (UI dropdowns)
+-- Lokasjoner som jsonb (UI-dropdowns)
 create or replace function inv.list_locations() returns jsonb
 language sql stable as $$
   select coalesce(jsonb_agg(jsonb_build_object('code', code, 'name', name, 'is_default', is_default,

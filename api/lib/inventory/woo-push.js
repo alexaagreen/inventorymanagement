@@ -1,107 +1,13 @@
-// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// Ledger → Woo: push available stock (outbox worker), reconcile, and
-// Woo → ledger: sync items (products/variations → inv.item).
-// The ledger is master: reconcile never writes Woo's quantity back into the ledger.
+// Ledger → Woo: push of available stock (outbox worker), reconcile, and
+// Woo → ledger: item sync (products/variations → inv.item).
+// The ledger is master: reconcile NEVER corrects the ledger from Woo — only the other way round.
 import { rpc, sql } from './rpc';
 import { wooConfigured, wooPost, wooGetAll, WooError } from './woo';
 import { inventoryConfig } from './config';
 
 const BATCH = 100;
-
-/** Comma-separated root slugs from inv.settings.track_exclude_category_slugs. */
-export function parseExcludedSlugs(csv) {
-  return new Set(String(csv || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
-}
-
-/** True when the item has at least one root and every root is excluded. No category → not excluded. */
-export function excludedByCategory(rootSlugs, exclude) {
-  const roots = [...new Set((rootSlugs || []).map((s) => String(s).trim().toLowerCase()).filter(Boolean))];
-  if (!roots.length) return false;
-  return roots.every((s) => exclude.has(s));
-}
-
-/**
- * track_stock for one product or variation.
- * mode `woo_manage_stock` (default) follows Woo manage_stock === true (`parent` is not tracked).
- * mode `all` tracks every product, except bundles and excluded roots.
- * A product under several roots is tracked when at least one root is not excluded.
- */
-export function decideTrackStock({ mode = 'woo_manage_stock', manageStock = false, isBundle = false, rootSlugs = [], exclude = new Set() } = {}) {
-  if (isBundle) return false;
-  const ex = exclude instanceof Set ? exclude : parseExcludedSlugs(exclude);
-  if (excludedByCategory(rootSlugs, ex)) return false;
-  if (mode === 'all') return true;
-  return manageStock === true;
-}
-
-/** Walk Woo categories to the root slug. Without a parent index, the assigned slug is the root. */
-export function rootSlugsForProduct(product, categoryById) {
-  const out = new Set();
-  for (const cat of product?.categories || []) {
-    let current = (categoryById && categoryById.get(Number(cat.id))) || cat;
-    const seen = new Set();
-    while (current?.parent && categoryById?.has(Number(current.parent)) && !seen.has(Number(current.id))) {
-      seen.add(Number(current.id));
-      current = categoryById.get(Number(current.parent));
-    }
-    const slug = current?.slug || cat.slug;
-    if (slug) out.add(String(slug).toLowerCase());
-  }
-  return [...out];
-}
-
-async function trackingSettings() {
-  const rows = await sql(`select key, value from inv.settings where key in ('track_stock_mode', 'track_exclude_category_slugs')`);
-  const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  return {
-    mode: map.track_stock_mode === 'all' ? 'all' : 'woo_manage_stock',
-    exclude: parseExcludedSlugs(map.track_exclude_category_slugs),
-  };
-}
-
-/** Bundle parent ids from public.bundle_components, when that mirror table exists. */
-async function bundleProductIds() {
-  const [reg] = await sql(`select to_regclass('public.bundle_components') as t`);
-  if (!reg?.t) return new Set();
-  const cols = await sql(
-    `select column_name from information_schema.columns
-      where table_schema = 'public' and table_name = 'bundle_components'`);
-  const names = new Set(cols.map((c) => c.column_name));
-  let col = null;
-  if (names.has('bundle_product_id')) col = 'bundle_product_id';
-  else if (names.has('bundle_id')) col = 'bundle_id';
-  else if (names.has('product_id') && (names.has('component_product_id') || names.has('component_id'))) col = 'product_id';
-  if (!col) {
-    const err = new Error('public.bundle_components needs bundle_product_id, bundle_id, or product_id plus a component column');
-    err.code = 'VALIDATION';
-    throw err;
-  }
-  const [{ ident }] = await sql(`select quote_ident($1) as ident`, [col]);
-  const rows = await sql(`select distinct ${ident}::bigint as id from public.bundle_components where ${ident} is not null`);
-  return new Set(rows.map((r) => Number(r.id)));
-}
-
-async function categoryIndex() {
-  try {
-    const cats = await wooGetAll('/products/categories');
-    return new Map((cats || []).map((c) => [Number(c.id), c]));
-  } catch {
-    return new Map();
-  }
-}
-
-async function wooTrackContext() {
-  const settings = await trackingSettings();
-  const [bundleIds, categoryById] = await Promise.all([bundleProductIds(), categoryIndex()]);
-  return { ...settings, bundleIds, categoryById };
-}
-
-function pushFields(id, qty, forceManage) {
-  const row = { id, stock_quantity: Number(qty) };
-  if (forceManage) row.manage_stock = true;
-  return row;
-}
 
 function pushEnabledFromConfig() {
   return inventoryConfig?.wooPush !== false;
@@ -125,32 +31,54 @@ async function markAll(rows, ok, error) {
   }
 }
 
-/** Apply a Woo batch response: { update: [{ id, stock_quantity } | { id, error }] }. */
+/** Handle a Woo batch response: { update: [{ id, stock_quantity, stock_status, manage_stock, … } | { id, error: {…} }] } */
 async function applyBatchResult(rows, result, idKey) {
   const byId = new Map((result?.update || []).map((u) => [String(u.id), u]));
   let pushed = 0; let failed = 0;
+  const mirror = [];
   for (const r of rows) {
     const u = byId.get(String(r[idKey]));
-    if (u && !u.error) { await rpc('mark_stock_pushed', [r.item_id, r.qty_to_push, true, null]); pushed++; }
-    else {
+    if (u && !u.error) {
+      await rpc('mark_stock_pushed', [r.item_id, r.qty_to_push, true, null]); pushed++;
+      mirror.push({
+        id: Number(u.id),
+        stock_quantity: typeof u.stock_quantity === 'number' ? u.stock_quantity : Number(r.qty_to_push),
+        stock_status: u.stock_status || null,
+        manage_stock: typeof u.manage_stock === 'boolean' ? u.manage_stock : true,
+      });
+    } else {
       const msg = u?.error ? `${u.error.code}: ${u.error.message}` : 'missing in batch response';
       await rpc('mark_stock_pushed', [r.item_id, r.qty_to_push, false, msg]); failed++;
     }
   }
-  return { pushed, failed };
+  const mirrored = await updateMirror(idKey === 'woo_variation_id' ? 'variations' : 'products', mirror);
+  return { pushed, failed, mirrored };
+}
+
+/**
+ * Write what Woo now holds straight into the storefront mirror (public.products /
+ * public.product_variations) so storefronts reading Supabase do not wait for the
+ * Woo → Supabase sync. Best effort: a mirror failure never fails the push.
+ */
+async function updateMirror(kind, rows) {
+  if (!rows.length) return 0;
+  try {
+    const r = await rpc('apply_mirror_stock', { [kind]: rows });
+    return Number(r?.[kind] || 0);
+  } catch (err) {
+    console.warn('[inventory] mirror stock update failed:', err.message);
+    return 0;
+  }
 }
 
 /**
  * Drain the push queue. Simple products: POST /products/batch.
- * Variations: POST /products/:parent/variations/batch (one call per parent).
- * track_stock_mode `all` also sends manage_stock: true, so Woo starts managing stock.
+ * Variations: POST /products/:parent/variations/batch (one per parent).
  */
 export async function pushStock({ limit = 100 } = {}) {
   if (!(await pushEnabled())) return { pushed: 0, failed: 0, skipped: 0, disabled: true };
   const due = await rpc('list_stock_push_due', [Math.min(Math.max(limit, 1), 500)]);
   if (!due?.length) return { pushed: 0, failed: 0, skipped: 0 };
-  const { mode } = await trackingSettings();
-  const forceManage = mode === 'all';
 
   const simple = due.filter((r) => r.woo_variation_id == null);
   const byParent = new Map();
@@ -160,12 +88,12 @@ export async function pushStock({ limit = 100 } = {}) {
     byParent.get(k).push(r);
   }
 
-  let pushed = 0; let failed = 0;
+  let pushed = 0; let failed = 0; let mirrored = 0;
   for (const part of chunk(simple, BATCH)) {
     try {
-      const res = await wooPost('/products/batch', { update: part.map((r) => pushFields(r.woo_product_id, r.qty_to_push, forceManage)) });
+      const res = await wooPost('/products/batch', { update: part.map((r) => ({ id: r.woo_product_id, manage_stock: true, stock_quantity: Number(r.qty_to_push) })) });
       const o = await applyBatchResult(part, res, 'woo_product_id');
-      pushed += o.pushed; failed += o.failed;
+      pushed += o.pushed; failed += o.failed; mirrored += o.mirrored;
     } catch (err) {
       await markAll(part, false, err.message); failed += part.length;
     }
@@ -174,21 +102,21 @@ export async function pushStock({ limit = 100 } = {}) {
     for (const part of chunk(rows, BATCH)) {
       try {
         const res = await wooPost(`/products/${parent}/variations/batch`, {
-          update: part.map((r) => pushFields(r.woo_variation_id, r.qty_to_push, forceManage)),
+          update: part.map((r) => ({ id: r.woo_variation_id, manage_stock: true, stock_quantity: Number(r.qty_to_push) })),
         });
         const o = await applyBatchResult(part, res, 'woo_variation_id');
-        pushed += o.pushed; failed += o.failed;
+        pushed += o.pushed; failed += o.failed; mirrored += o.mirrored;
       } catch (err) {
         await markAll(part, false, err.message); failed += part.length;
       }
     }
   }
-  return { pushed, failed, skipped: 0 };
+  return { pushed, failed, skipped: 0, mirrored };
 }
 
 /**
- * Start a push without waiting (after a write). The per-minute cron is the guarantee;
- * this only makes Woo update within seconds in the normal case.
+ * Start a push without waiting (after a write). The every-minute cron is the guarantee;
+ * this just makes Woo update within seconds in the normal case.
  */
 export function kickPush() {
   if (process.env.INVENTORY_KICK_PUSH === 'off') return;
@@ -205,21 +133,55 @@ function variationName(product, v) {
   return attrs ? `${product.name} – ${attrs}` : product.name;
 }
 
-/** Woo product (+ variations) → inv.item rows. `ctx` carries track_stock_mode, exclusions, categories and bundles. */
-export function mapWooProduct(p, variations = [], ctx = {}) {
-  const mode = ctx.mode === 'all' ? 'all' : 'woo_manage_stock';
-  const exclude = ctx.exclude instanceof Set ? ctx.exclude : parseExcludedSlugs(ctx.exclude);
-  const roots = ctx.rootSlugs || rootSlugsForProduct(p, ctx.categoryById);
-  const isBundle = p.type === 'bundle' || Boolean(ctx.bundleIds && ctx.bundleIds.has(Number(p.id)));
-  const track = (manageStock) => decideTrackStock({ mode, manageStock, isBundle, rootSlugs: roots, exclude });
+/**
+ * Tracking rules (v0.6.0), read from inv.settings — same rules as the storefront adapter (0091):
+ *   mode 'woo_manage_stock' → track what Woo manages; 'all' → track everything,
+ *   except items whose categories ALL sit under an excluded root slug.
+ * Bundles are only detectable in the storefront mirror, not via the Woo REST path.
+ */
+export async function getTrackRules() {
+  const rows = await sql(`select key, value from inv.settings where key in ('track_stock_mode', 'track_exclude_category_slugs')`);
+  const get = (k) => rows.find((r) => r.key === k)?.value || '';
+  return {
+    mode: get('track_stock_mode') === 'all' ? 'all' : 'woo_manage_stock',
+    exclude: get('track_exclude_category_slugs').split(',').map((x) => x.trim()).filter(Boolean),
+  };
+}
+
+let _rootsCache = { at: 0, map: null };
+/** Woo category id → root slug, cached 10 minutes. */
+async function categoryRoots() {
+  if (_rootsCache.map && Date.now() - _rootsCache.at < 10 * 60 * 1000) return _rootsCache.map;
+  const cats = await wooGetAll('/products/categories', {});
+  const byId = new Map(cats.map((c) => [c.id, c]));
+  const map = new Map();
+  for (const c of cats) {
+    let cur = c; let guard = 0;
+    while (cur && cur.parent && byId.has(cur.parent) && guard++ < 20) cur = byId.get(cur.parent);
+    map.set(c.id, cur?.slug || c.slug);
+  }
+  _rootsCache = { at: Date.now(), map };
+  return map;
+}
+
+function excludedByRoots(product, rules, roots) {
+  if (!rules?.exclude?.length || !roots) return false;
+  const ids = (product.categories || []).map((c) => c.id);
+  if (!ids.length) return false;
+  return ids.every((id) => rules.exclude.includes(roots.get(id)));
+}
+
+/** Woo product (+ variations) → inv.item rows. */
+export function mapWooProduct(p, variations = [], rules = { mode: 'woo_manage_stock', exclude: [] }, roots = null) {
+  const excluded = excludedByRoots(p, rules, roots);
+  const track = (managed) => (excluded ? false : rules.mode === 'all' ? true : managed === true);
   if (p.type === 'variable') {
     return variations.map((v) => ({
       sku: v.sku || null,
       woo_product_id: p.id,
       woo_variation_id: v.id,
       name: variationName(p, v),
-      // manage_stock 'parent' means stock is controlled on the parent. In woo_manage_stock mode
-      // that variation is not tracked, because it cannot be pushed on its own.
+      // manage_stock 'parent' = stock is managed on the parent → not pushable per variation (woo_manage_stock mode)
       track_stock: track(v.manage_stock),
       active: ACTIVE_STATUSES.has(p.status) && ACTIVE_STATUSES.has(v.status || 'publish'),
     }));
@@ -246,22 +208,22 @@ async function fetchWooCatalog() {
 }
 
 /**
- * Sync items. Prefers the shop catalog adapter (inv.upsert_items_from_catalog,
- * reads the Supabase mirror), otherwise Woo REST directly. Both paths use the same
- * track_stock rules (mode, excluded root categories, bundles).
+ * Sync items. Prefers the shop's catalog adapter (inv.upsert_items_from_catalog,
+ * reads the Supabase mirror), otherwise Woo REST directly.
  */
 export async function syncItems({ source = 'auto' } = {}) {
   if (source !== 'woo') {
-    // The adapter (0091) reads the storefront mirror in this database — use it when the mirror exists.
+    // The adapter (0090) reads the storefront mirror in the same database — use it when the mirror exists.
     const [{ has }] = await sql(`select to_regprocedure('inv.upsert_items_from_catalog()') is not null
                                         and to_regclass('public.products') is not null as has`);
     if (has) return { source: 'catalog_adapter', ...(await rpc('upsert_items_from_catalog', [])) };
     if (source === 'catalog') return { source: 'catalog_adapter', error: 'storefront mirror (public.products) not found in the inventory database' };
   }
   if (!wooConfigured()) throw new WooError(0, 'No catalog adapter and WooCommerce is not configured');
-  const ctx = await wooTrackContext();
   const catalog = await fetchWooCatalog();
-  const items = catalog.flatMap(({ product, variations }) => mapWooProduct(product, variations, ctx));
+  const rules = await getTrackRules();
+  const roots = rules.exclude.length ? await categoryRoots() : null;
+  const items = catalog.flatMap(({ product, variations }) => mapWooProduct(product, variations, rules, roots));
   return { source: 'woo', ...(await rpc('upsert_items', { items, deactivate_missing: true })) };
 }
 
@@ -269,8 +231,9 @@ export async function syncItems({ source = 'auto' } = {}) {
 export async function upsertWooProduct(product) {
   let variations = [];
   if (product.type === 'variable') variations = await wooGetAll(`/products/${product.id}/variations`, { status: 'any' });
-  const ctx = await wooTrackContext();
-  const items = mapWooProduct(product, variations, ctx);
+  const rules = await getTrackRules();
+  const roots = rules.exclude.length ? await categoryRoots() : null;
+  const items = mapWooProduct(product, variations, rules, roots);
   const res = await rpc('upsert_items', { items, deactivate_missing: false });
   // Variations removed from the product → inactive
   if (product.type === 'variable') {
@@ -291,13 +254,11 @@ export async function deactivateWooProduct(productId) {
 // ── Reconcile ──────────────────────────────────────────────────────────────
 
 /**
- * Compare Woo stock_quantity with the ledger's available for every tracked item.
- * fix=true enqueues the diffs and pushes. Woo's value is never written into the ledger.
- * In track_stock_mode `all`, a tracked item with manage_stock off is a diff, so fix turns it on.
+ * Compare Woo stock_quantity with the ledger's available for all tracked items.
+ * fix=true enqueues the differences and pushes. The Woo value is never written into the ledger.
  */
 export async function reconcile({ fix = false } = {}) {
   if (!wooConfigured()) throw new WooError(0, 'WooCommerce is not configured');
-  const { mode } = await trackingSettings();
   const catalog = await fetchWooCatalog();
   const woo = new Map();
   for (const { product, variations } of catalog) {
@@ -318,10 +279,8 @@ export async function reconcile({ fix = false } = {}) {
     const w = woo.get(`${it.woo_product_id}:${it.woo_variation_id ?? ''}`);
     const expected = floor ? Math.max(Math.floor(Number(it.available)), 0) : Math.floor(Number(it.available));
     if (!w) { missing_in_woo.push(it.sku); continue; }
-    if (mode !== 'all' && !w.manage) continue;
-    const qtyDiff = Number(w.stock ?? 0) !== expected;
-    const manageOff = mode === 'all' && w.manage !== true;
-    if (qtyDiff || manageOff) diffs.push({ sku: it.sku, woo: w.stock, ledger: expected, manage_stock: w.manage === true });
+    if (!w.manage) continue;
+    if (Number(w.stock ?? 0) !== expected) diffs.push({ sku: it.sku, woo: w.stock, ledger: expected });
   }
 
   let push = null;

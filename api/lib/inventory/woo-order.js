@@ -1,6 +1,6 @@
-// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// Woo → ledger: webhook verification (HMAC), order/refund into inv.apply_woo_order /
+// Woo → ledger: webhook verification (HMAC), orders/refunds into inv.apply_woo_order /
 // inv.apply_woo_refund, and backfill of orders from Woo REST.
 import crypto from 'node:crypto';
 import { rpc, sql } from './rpc';
@@ -36,7 +36,7 @@ async function processedRefunds(orderId) {
   return new Set((row?.refunds || []).map(String));
 }
 
-/** Run an order through the ledger, including new refunds (fetched from Woo REST). */
+/** Run an order through the ledger, incl. new refunds (fetched from Woo REST). */
 export async function applyOrder(order, source = 'webhook') {
   const result = await rpc('apply_woo_order', [order, source]);
   const refunds = [];
@@ -52,8 +52,8 @@ export async function applyOrder(order, source = 'webhook') {
 }
 
 /**
- * Webhook-handler for order.created / order.updated / order.deleted.
- * Returns { status, body } — the route sends that response.
+ * Webhook handler for order.created / order.updated / order.deleted.
+ * Returns { status, body } — the route sends it.
  */
 export async function handleOrderWebhook(rawBody, headers) {
   const topic = headers['x-wc-webhook-topic'] || null;
@@ -91,8 +91,8 @@ export async function handleOrderWebhook(rawBody, headers) {
 }
 
 /**
- * Backfill: fetch orders changed in [from, to) and run them through the ledger (idempotent).
- * A time budget keeps the call inside the serverless limit; returns next_page.
+ * Backfill: fetch orders modified in [from, to) and run them through the ledger (idempotent).
+ * Time budget keeps the call within the serverless limit; returns next_page.
  */
 export async function importOrders({ from, to, page = 1, budgetMs = 50000 } = {}) {
   const started = Date.now();

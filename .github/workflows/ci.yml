@@ -44,7 +44,7 @@ jobs:
           const entry = lock.migrations[name];
           const shopFile = path.join(migDir, entry.file);
           const original = fs.readFileSync(shopFile);
-          const stale = Buffer.from(original.toString('utf8').replace('inventory-ledger v0.6.0', 'inventory-ledger v0.5.0'));
+          const stale = Buffer.from(original.toString('utf8').replace(/inventory-ledger v\d+\.\d+\.\d+/, 'inventory-ledger v0.0.0'));
           if (stale.equals(original)) throw new Error('could not make a stale migration copy');
           fs.writeFileSync(shopFile, stale);
           entry.sha256 = crypto.createHash('sha256').update(stale).digest('hex');

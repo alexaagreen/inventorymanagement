@@ -1,9 +1,9 @@
-// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// route({ GET, POST, … }) — shared wrapper for every /api/inventory/* route:
-//   * method dispatch (405 with an Allow header)
+// route({ GET, POST, … }) — shared wrapper for all /api/inventory/* routes:
+//   * method dispatch (405 with Allow header)
 //   * auth (Bearer INVENTORY_API_KEY or session) → ctx.by
-//   * Idempotency-Key on writes (24 h, stored in inv.idempotency_key)
+//   * Idempotency-Key on write calls (24 h, stored in inv.idempotency_key)
 //   * error mapping: InventoryError / pg error → { error: { code, message, details } }
 // The handler returns a body (200 for GET, 201 for POST) or withStatus(code, body).
 import { authenticate } from './auth';
@@ -62,7 +62,7 @@ export function route(methods, { auth = true, noPush = false } = {}) {
         ).catch(() => {});
       }
       res.status(status).json(payload ?? null);
-      // Write finished → ask the push worker to update Woo now (cron is the guarantee).
+      // Write done → ask the push worker to update Woo now (cron is the guarantee).
       if (WRITE.has(req.method) && status < 300 && !noPush) kickPush();
       return undefined;
     } catch (e) {

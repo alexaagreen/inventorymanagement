@@ -5,10 +5,9 @@ export function startWooMock() {
   const state = {
     products: [],            // Woo product objects
     variations: {},          // parentId → [variation]
-    categories: [],          // Woo product categories (id, slug, parent)
     refunds: {},             // `${orderId}:${refundId}` → refund
     orders: [],              // for /orders-backfill
-    failIds: new Set(),      // ids that should fail in a batch
+    failIds: new Set(),      // ids that should fail in batch
     requests: [],
   };
   const server = http.createServer((req, res) => {
@@ -31,7 +30,6 @@ export function startWooMock() {
       };
       let m;
       if (req.method === 'GET' && path === '/products') return paged(state.products);
-      if (req.method === 'GET' && path === '/products/categories') return paged(state.categories);
       if (req.method === 'GET' && (m = /^\/products\/(\d+)\/variations$/.exec(path))) return paged(state.variations[m[1]] || []);
       if (req.method === 'GET' && (m = /^\/products\/(\d+)$/.exec(path))) return send(200, state.products.find((p) => String(p.id) === m[1]) || {});
       if (req.method === 'POST' && (path === '/products/batch' || /^\/products\/\d+\/variations\/batch$/.test(path))) {
@@ -40,13 +38,10 @@ export function startWooMock() {
           const target = path === '/products/batch'
             ? state.products.find((p) => p.id === x.id)
             : Object.values(state.variations).flat().find((v) => v.id === x.id);
-          if (target) {
-            target.stock_quantity = x.stock_quantity;
-            if (x.manage_stock != null) target.manage_stock = x.manage_stock;
-          }
-          const updated = { id: x.id, stock_quantity: x.stock_quantity };
-          if (x.manage_stock != null) updated.manage_stock = x.manage_stock;
-          return updated;
+          if (target) { target.stock_quantity = x.stock_quantity; target.manage_stock = x.manage_stock ?? target.manage_stock; }
+          // Like Woo: the response carries the saved object, incl. the derived stock_status.
+          return { id: x.id, stock_quantity: x.stock_quantity, manage_stock: x.manage_stock ?? true,
+                   stock_status: x.stock_quantity > 0 ? 'instock' : 'outofstock' };
         });
         return send(200, { update });
       }
@@ -54,7 +49,12 @@ export function startWooMock() {
         const r = state.refunds[`${m[1]}:${m[2]}`];
         return r ? send(200, r) : send(404, { code: 'woocommerce_rest_invalid_id', message: 'Invalid ID.' });
       }
-      if (req.method === 'GET' && path === '/orders') return paged(state.orders);
+      // Like Woo: status=any lists everything except the trash; GET /orders/:id also returns trashed orders.
+      if (req.method === 'GET' && path === '/orders') return paged(state.orders.filter((o) => o.status !== 'trash'));
+      if (req.method === 'GET' && (m = /^\/orders\/(\d+)$/.exec(path))) {
+        const o = state.orders.find((x) => String(x.id) === m[1]);
+        return o ? send(200, o) : send(404, { code: 'woocommerce_rest_shop_order_invalid_id', message: 'Invalid ID.' });
+      }
       return send(404, { code: 'rest_no_route', message: 'No route' });
     });
   });
