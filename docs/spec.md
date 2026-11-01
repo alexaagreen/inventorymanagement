@@ -437,8 +437,37 @@ Tynt lag: valider input (zod), kall RPC via `pg`, returnér JSON. Ingen forretni
 
 - **Idempotens:** skrivende kall støtter `Idempotency-Key`-header; nøkkelen lagres i `inv.idempotency_key (key pk, response jsonb, created_at)` i 24 t og samme svar returneres ved retry. Webhooks/salg er i tillegg idempotente på `(ref_type, ref_id, ref_line)`.
 - **Paginering:** `limit` (default 100, maks 500) + `cursor` (opak, = siste `id`). Svar: `{ data: [...], next_cursor: "…" | null, total?: n }` (`total` bare når `count=1`).
-- **Eksport:** liste-endepunkter støtter `format=csv` (UTF-8, `;`-separert, norsk Excel).
+- **Eksport:** liste- og rapport-endepunkter støtter `format=csv|xlsx|pdf` — én felles standard, se §6.0.1.
 - **Skriv-etter-skriv:** etter vellykket skrivende kall trigges push-worker asynkront (`fetch` til egen `/sync/push-stock` uten å vente), slik at Woo oppdateres innen sekunder uten å vente på cron.
+
+### 6.0.1 Nedlasting — én standard for CSV, Excel og PDF (v0.11.0)
+Modulen eier hvordan data lastes ned. Butikkene og nye endepunkter bygger **aldri** egen CSV/Excel/PDF-kode.
+
+| format | for | innhold |
+|---|---|---|
+| `csv` | maskiner, agenter, import | header = feltnøkler (`sku;name;qty;…`), rå verdier, `;`, desimalkomma, UTF-8 BOM. Uendret siden v0.3 — scripts som leser CSV brekker ikke. |
+| `xlsx` | folk, regnskap | tittel + filterlinjer + «Generert … av …» øverst, overskrift med autofilter og frosne ruter, ekte tall og datoer med tallformat, summeringsrad, A4 tilpasset bredden ved utskrift. |
+| `pdf` | folk, arkiv, revisor | A4 (liggende når tabellen er bred), tittel + filterlinjer, kolonneoverskrift på hver side, sebrarader, summeringsrad, «Side n av N» og generert-tidspunkt i bunntekst. |
+
+Regler:
+1. Ruten gjør bare `const fmt = exportFormat(query)` → hent **hele** utvalget (`all: Boolean(fmt)`) → `sendExport(res, fmt, report, ctx)`
+   (`api/lib/inventory/export.js`). `format=excel` er alias for `xlsx`; ukjent format = 400 `VALIDATION`.
+2. Kolonner hentes fra standardkolonnene med `cols(['sku','name','qty','value', …])`. Samme nøkkel har samme etikett, type
+   (`text|code|int|qty|nok|cost|date|datetime|bool|json`), justering og summering overalt. Trengs en ny kolonne som kan gå
+   igjen → legg den i `STD` i `export.js`; engangskolonner kan overstyres inline (`{ key, nb, en, type, total }`).
+3. `report` = `{ name (filnavn), title {nb,en}, meta [[etikett, verdi]] (aktive filtre; tomme hoppes over), columns,
+   rows, csvColumns? (behold eksisterende CSV-rekkefølge), totals?: false, sheet? }`.
+4. Språk på etiketter: `?lang=nb|en`, ellers `inventoryConfig.exportLanguage` (butikkens `config.js`), ellers `nb`.
+   Tall i PDF: `1 234,56`; tidspunkt i `Europe/Oslo`. Beløp er NOK og står i kolonneetiketten («Verdi (NOK)»).
+5. Ingen nye avhengigheter: XLSX (`xlsx.js`) og PDF (`pdf.js`, standardfontene Helvetica med WinAnsi — dekker æøå)
+   skrives av modulen selv. Butikkene trenger fortsatt bare `pg`.
+6. UI: nedlastingsknapper bygges med `exportUrl(path, params, format)` og `EXPORT_FORMATS` fra `lib/inventory/client.js`
+   (Excel, PDF, CSV i den rekkefølgen), med de samme filtrene som skjermen viser.
+7. Testen `api/tests/export.test.js` sjekker at hvert nedlastbare endepunkt leverer alle tre formatene, og feiler hvis en
+   rute skriver CSV/PDF selv.
+
+Nedlastbare i v0.11.0: `/stock`, `/valuation`, `/movements`, `/items/:sku/movements`, `/suppliers/:s/items`,
+`/suppliers/:s/movements`, `/reports/cogs`, `/reports/stock-as-of`, `/month-close/:period`.
 
 ### 6.1 Varer og status
 ```
@@ -447,18 +476,18 @@ GET  /items/:sku                              → item + status (= én rad fra v
 POST /items/sync                              → upsert_items_from_catalog()   (manuell/cron)
 PATCH /items/:sku   { reorder_point?, reorder_qty?, attributes? }   (Woo-felt kan ikke endres her)
 
-GET  /stock?sku=&skus=A,B,C&location=&negative=1&below_reorder=1&q=&limit=&cursor=&format=csv
+GET  /stock?sku=&skus=A,B,C&location=&negative=1&below_reorder=1&q=&limit=&cursor=&format=csv|xlsx|pdf
      → rader fra v_item_status (eller v_stock_by_location når location= er satt)
 GET  /stock/:sku                              → { sku, on_hand, available, on_order, next_delivery, avg_cost, stock_value,
                                                   last_purchase_cost, last_purchase_at, locations:[{code,on_hand,value,avg_cost}],
                                                   open_consumption_qty, layers:[{id, received_at, qty_remaining, unit_cost, ref}] }
-GET  /valuation?location=&format=csv          → { total_value, rows:[{sku, on_hand, avg_cost, value}] }   (nåtid; historisk: §6.8)
+GET  /valuation?location=&format=csv|xlsx|pdf          → { total_value, rows:[{sku, on_hand, avg_cost, value}] }   (nåtid; historisk: §6.8)
 ```
 
 ### 6.2 Bevegelser
 ```
 GET /movements?sku=&skus=&type=sale,purchase_receipt&kind=salg|innkjop|justering|flytting&location=
-               &ref_type=&ref_id=&from=&to=&by=&q=&include_reversed=0&limit=&cursor=&format=csv
+               &ref_type=&ref_id=&from=&to=&by=&q=&include_reversed=0&limit=&cursor=&format=csv|xlsx|pdf
     → data:[{ id, occurred_at, sku, item_name, location, type, kind, qty, unit_cost, total_cost, cost_estimated,
               on_hand_after, ref_type, ref_id, ref_line, reference, note, created_by, reversal_of, reversed_by, metadata }]
 GET  /movements/:id                            → movement + consumptions[] (+ layer-detaljer) + cogs_corrections[]
@@ -583,7 +612,7 @@ Agenter (grokbot o.l.) bruker samme API med `Authorization: Bearer <INVENTORY_AP
   `net_change`, `cogs`, `movements`, `last_movement_at`.
 - `GET /suppliers/:supplier/movements` — bevegelser for alle leverandørens produkter.
 - `GET /items/:sku/movements?from=&to=` — ett produkt: lager, leverandører, `summary` for perioden og bevegelsene (nyeste først, paginert).
-Alle tre støtter `format=csv`.
+Alle tre støtter `format=csv|xlsx|pdf` (§6.0.1).
 
 ### 6.8 Månedsslutt og lager per dato (v0.11.0, migrasjon 0098)
 **Lager per tidspunkt** bygges fra ledgeren selv (`inv._stock_as_of(at)`, `at` eksklusiv):
@@ -613,12 +642,12 @@ inv.close_due_months({ by?, source?, from?, through?, ignore_grace? }) → { clo
 GET  /month-close                         → { data:[close + prev_total_value, delta_value] nyeste først, first_period, last_completed, missing:[] }
 POST /month-close { period, recalculate?, note? }   → 201 closed | 200 existing/recalculated
 POST /month-close { all_missing: true }   → lukker alle manglende måneder (backfill)
-GET  /month-close/:period?by=sku|location&location=&q=&compare=0&format=csv
+GET  /month-close/:period?by=sku|location&location=&q=&compare=0&format=csv|xlsx|pdf
      → { close (inkl. backdated_movements, history), older, newer, previous_period,
          totals:{rows, qty, value, prev_qty, prev_value, delta_value},
          rows:[{sku, name, qty, value, unit_cost, locations:{CODE:{qty,value}}, prev_qty, prev_value, delta_qty, delta_value}] }
      -- 404 NOT_FOUND hvis måneden ikke er lukket; sammenligning når forrige måned er lukket
-GET  /reports/stock-as-of?at=YYYY-MM-DD|ISO&by=&location=&q=&format=csv   → samme radform, levende (ikke fryst);
+GET  /reports/stock-as-of?at=YYYY-MM-DD|ISO&by=&location=&q=&format=csv|xlsx|pdf   → samme radform, levende (ikke fryst);
      ren dato = slutten av dagen i butikkens tidssone
 POST /sync/month-close                    → cron: close_due_months (source=scheduled). Forslag: "15 2 1 * *" (UTC)
 ```
@@ -872,7 +901,7 @@ Mønstre per flate (Skarpekniver som eksempel):
 | Sett lager til 0 (`zeroStock`) | `POST /adjustments { lines:[{sku, new_qty:0}] }` | Samme ≤3-regel håndheves i UI/case-koden som før (ledgeren bryr seg ikke). |
 | Innkjøp (`supplier-reorder`, `pending-po`, JBT auto-PO) | `POST /purchase-orders` (draft) → `POST /:id/status {sent}` | `pending_po` beholdes for leverandør-token-flyten; `markSent` kaller nå `POST /purchase-orders` i stedet for `createPurchaseOrder` i Cin7, og lagrer `inventory_po_id`. |
 | Varemottak (`/varemottak`) | `GET /purchase-orders?status=sent,partially_received` → `GET /:id` → `POST /:id/receive` | `goods_receipt_confirmations` (drift bekrefter linje for linje) beholdes som arbeidsflate; «Fullfør mottak» sender bekreftede linjer som `lines[]` med `qty` + ev. overstyrt `unit_cost`. Avvik-Slack som før. Delmottak = flere receive-kall. |
-| Movements (`/lager > Vareflyt`) | `GET /movements?sku=&type=&from=&to=&cursor=` | Erstatter `cin7-movements.js`. `kind` for fargekoding, `on_hand_after` som saldo-kolonne, «Last mer» på `next_cursor`, «Eksporter» = samme URL + `format=csv`. |
+| Movements (`/lager > Vareflyt`) | `GET /movements?sku=&type=&from=&to=&cursor=` | Erstatter `cin7-movements.js`. `kind` for fargekoding, `on_hand_after` som saldo-kolonne, «Last mer» på `next_cursor`, «Eksporter» = `exportUrl('/movements', filtre, 'xlsx'|'pdf'|'csv')` (§6.0.1). |
 | Stock adjustments-liste (`/stock-adjustments`) | `GET /adjustments` → `GET /adjustments/:id` → `POST /:id/reverse` | Erstatter `cin7-stock-adjustments.js`; ingen lazy-henting lenger (alt er lokalt). |
 | Overføring lager → butikk | `POST /transfers` | Ny side/fane; refill-flyten (`refill-butikk-daily`) kan senere poste transfers automatisk når plukket er bekreftet. |
 | Lager-helse (dashboard) | `GET /stock?negative=1`, `GET /stock?below_reorder=1`, `GET /sync/status` | Kort på forsiden: negative varer (udekket konsum), under bestillingspunkt, push-kø/feil. |

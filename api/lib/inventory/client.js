@@ -42,3 +42,16 @@ export function qs(params = {}) {
   const s = u.toString();
   return s ? `?${s}` : '';
 }
+
+// Downloads (spec §6.0.1): every downloadable endpoint takes format=csv|xlsx|pdf. UIs build the
+// link with exportUrl and offer the formats in this order — never their own CSV/Excel/PDF code.
+export const EXPORT_FORMATS = [
+  { format: 'xlsx', label: 'Excel' },
+  { format: 'pdf', label: 'PDF' },
+  { format: 'csv', label: 'CSV' },
+];
+
+/** Download link for a list/report path with the same filters as the screen (cursor/limit dropped). */
+export function exportUrl(path, params = {}, format = 'xlsx') {
+  return `${BASE}${path}${qs({ ...params, cursor: null, limit: null, format })}`;
+}

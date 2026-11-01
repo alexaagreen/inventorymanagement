@@ -1,15 +1,16 @@
 // inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
-import { route, qBool, qLimit, qList, qDate, isCsv, requireParam } from '../../../../lib/inventory/handler';
+import { route, qBool, qLimit, qList, qDate, requireParam } from '../../../../lib/inventory/handler';
 import { listMovements } from '../../../../lib/inventory/queries';
 import { rpc } from '../../../../lib/inventory/rpc';
-import { sendCsv } from '../../../../lib/inventory/csv';
+import { exportFormat, sendExport, movementColumns, movementMeta, MOVEMENT_CSV } from '../../../../lib/inventory/export';
 
 // GET  /api/inventory/movements?sku=&skus=&type=sale,purchase_receipt&kind=salg&location=
-//        &ref_type=&ref_id=&from=&to=&by=&q=&include_reversed=0&limit=&cursor=&count=1&format=csv
+//        &ref_type=&ref_id=&from=&to=&by=&q=&include_reversed=0&limit=&cursor=&count=1&format=csv|xlsx|pdf
 // POST /api/inventory/movements   { sku, type, qty, unit_cost?, location?, ref_type?, ref_id?, … }  (raw)
 export default route({
-  GET: async (req, res, { query }) => {
-    const csv = isCsv(query);
+  GET: async (req, res, ctx) => {
+    const { query } = ctx;
+    const fmt = exportFormat(query);
     const out = await listMovements({
       skus: qList(query.skus) || qList(query.sku),
       types: qList(query.type),
@@ -25,11 +26,13 @@ export default route({
       count: qBool(query.count) ?? false,
       limit: qLimit(query.limit),
       cursor: query.cursor,
-      all: csv,
+      all: Boolean(fmt),
     });
-    if (csv) {
-      return sendCsv(res, 'vareflyt.csv', out.data, ['id', 'occurred_at', 'sku', 'item_name', 'location', 'type', 'kind', 'qty',
-        'unit_cost', 'total_cost', 'cost_estimated', 'on_hand_after', 'reference', 'ref_type', 'ref_id', 'note', 'created_by']);
+    if (fmt) {
+      return sendExport(res, fmt, {
+        name: 'vareflyt', title: { nb: 'Bevegelser', en: 'Movements' }, meta: movementMeta(query),
+        columns: movementColumns(), csvColumns: MOVEMENT_CSV, rows: out.data,
+      }, ctx);
     }
     return out;
   },

@@ -12,6 +12,7 @@
 //   }
 
 export const inventoryConfig = {
+  exportLanguage: 'nb',      // labels in Excel/PDF downloads: 'nb' | 'en' (?lang= overrides per request)
   defaultLocation: null,          // null = the location marked is_default in inv.location
   slackChannel: null,             // e.g. '#lager' (alerts from reconcile/open consumption)
   wooPush: true,                  // push available → Woo stock_quantity

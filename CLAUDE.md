@@ -60,7 +60,7 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `migrations/0098_inv_month_close.sql` | v0.11.0 månedsslutt: `_stock_as_of(at)`, `month_close`/`month_close_line`, `close_month`, `close_due_months` (spec §6.8) |
 | `scripts/install.mjs` | installerer i butikk: `--api`, `--migrations`, `--check`, `--dry-run`, `--force` |
 | `api/lib/inventory/config.example.js` | mal for butikkens `config.js` (NextAuth `getToken` / `getServerSession`) |
-| `api/lib/inventory/` | HTTP-laget: `db` (egen pool), `rpc` (inv.* → jsonb, feilmapping), `handler` (route-wrapper: auth, 405, Idempotency-Key, feil), `queries` (lister/keyset), `auth`, `errors` (kode→status + norsk brukertekst), `csv`, `client` (fetch-helper for UI), `config` (**butikk-spesifikk, overskrives ikke**) |
+| `api/lib/inventory/` | HTTP-laget: `db` (egen pool), `rpc` (inv.* → jsonb, feilmapping), `handler` (route-wrapper: auth, 405, Idempotency-Key, feil), `queries` (lister/keyset), `auth`, `errors` (kode→status + norsk brukertekst), `export` (**standarden for nedlasting**: csv/xlsx/pdf, standardkolonner) + `xlsx`/`pdf`/`csv` (skrivere), `client` (fetch-helper + `exportUrl` for UI), `config` (**butikk-spesifikk, overskrives ikke**) |
 | `api/lib/inventory/fx.js` | Norges Bank-kurs som referanse (`GET /fx/norges-bank`) — vises i UI, brukes aldri automatisk |
 | `api/lib/inventory/order-reconcile.js` | v0.9.0: `reconcileOrders()` — worker for ordre-avstemmingen (rutene `order-reconcile/**`, butikkens daglige cron) |
 | `api/lib/inventory/agent-guide.js` | v0.10.0: guide for AI-agenter — `GET /api/inventory/guide` (JSON, `?format=md`). Hold den i takt med rutene |
@@ -86,7 +86,12 @@ cd api && npm ci && npm test && npm run build
   returnerer body (GET → 200, POST → 201) eller `withStatus(code, body)`. Ingen forretningslogikk i
   rutene — skrivinger går til `rpc('<inv-funksjon>', …)`, lesinger til `queries.js`.
 - `ctx.by` settes fra session (e-post) eller API-nøkkel (`x-inventory-by`/`body.by`, ellers `api-key`).
-- Lister: `{ data, next_cursor }`, `limit` ≤ 500, `format=csv` gir hele utvalget som CSV (`;`, BOM).
+- Lister: `{ data, next_cursor }`, `limit` ≤ 500.
+- **Nedlasting (spec §6.0.1) — én standard, ikke-forhandlingsbart:** `format=csv|xlsx|pdf` på alle liste-/rapport-endepunkter,
+  alltid via `exportFormat` + `sendExport` + `cols([...])` i `lib/inventory/export.js`. Ingen rute eller butikk skriver egen
+  CSV/Excel/PDF eller egne kolonneetiketter; nye gjenbrukbare kolonner legges i `STD`. CSV = feltnøkler og rå verdier (maskiner),
+  xlsx/pdf = etiketter, tallformat, filterlinjer og summering (folk). UI bruker `exportUrl` + `EXPORT_FORMATS` fra `client.js`.
+  Nytt nedlastbart endepunkt → legg det i casene i `api/tests/export.test.js`.
 - Etter vellykket skriv kaller `route()` `kickPush()` (fire-and-forget). Cron `sync/push-stock` hvert minutt er
   garantien. `INVENTORY_KICK_PUSH=off` slår av kick (tester).
 - Webhook-rutene bruker ikke `route()` (rå body for HMAC, `bodyParser: false`) og må allowlistes i

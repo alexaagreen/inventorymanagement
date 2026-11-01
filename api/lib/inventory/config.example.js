@@ -31,6 +31,7 @@ export async function getSessionUser(req /* , res */) {
 // }
 
 export const inventoryConfig = {
+  exportLanguage: 'nb',      // labels in Excel/PDF downloads: 'nb' | 'en' (?lang= overrides per request)
   defaultLocation: null,   // null = the location marked is_default in inv.location
   slackChannel: null,      // e.g. '#lager'
   wooPush: true,           // push available → Woo stock_quantity (also gated by inv.settings.woo_push_enabled)
