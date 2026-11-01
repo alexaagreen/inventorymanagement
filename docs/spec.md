@@ -452,7 +452,7 @@ GET  /stock?sku=&skus=A,B,C&location=&negative=1&below_reorder=1&q=&limit=&curso
 GET  /stock/:sku                              → { sku, on_hand, available, on_order, next_delivery, avg_cost, stock_value,
                                                   last_purchase_cost, last_purchase_at, locations:[{code,on_hand,value,avg_cost}],
                                                   open_consumption_qty, layers:[{id, received_at, qty_remaining, unit_cost, ref}] }
-GET  /valuation?location=&format=csv          → { total_value, rows:[{sku, on_hand, avg_cost, value}] }   (nåtid; historisk = v2)
+GET  /valuation?location=&format=csv          → { total_value, rows:[{sku, on_hand, avg_cost, value}] }   (nåtid; historisk: §6.8)
 ```
 
 ### 6.2 Bevegelser
@@ -585,6 +585,46 @@ Agenter (grokbot o.l.) bruker samme API med `Authorization: Bearer <INVENTORY_AP
 - `GET /items/:sku/movements?from=&to=` — ett produkt: lager, leverandører, `summary` for perioden og bevegelsene (nyeste først, paginert).
 Alle tre støtter `format=csv`.
 
+### 6.8 Månedsslutt og lager per dato (v0.11.0, migrasjon 0098)
+**Lager per tidspunkt** bygges fra ledgeren selv (`inv._stock_as_of(at)`, `at` eksklusiv):
+antall = Σ `movement.qty` med `occurred_at < at`; verdi = Σ over FIFO-lag hvis opprettende bevegelse skjedde før `at`
+av (`qty_in` − konsum fra bevegelser før `at`) × lagets `unit_cost`. Samme regel som `stock_balance.value` (udekket konsum
+har ingen verdi), så lager per `now()` = `stock_balance` eksakt (t32). Reverseringer bokføres «nå» og endrer ikke fortiden.
+
+**Månedsslutt** fryser bildet ved slutten av en måned i lokal tid (setting `timezone`, standard `Europe/Oslo`; oktober =
+`occurred_at < 1. nov 00:00 Oslo`):
+- `inv.month_close` — én rad per måned (`period` = 1. i måneden, unik): `cutoff_at`, `total_qty`, `total_value`, `sku_count`,
+  `line_count`, `negative_lines`, `source` (`scheduled|manual|backfill`), `closed_by/at`, `recalculated_by/at`, `recalc_count`,
+  `history` (tidligere totaler ved rekalkulering), `movement_watermark` (maks movement-id da linjene ble beregnet).
+- `inv.month_close_line` — én rad per (item × lokasjon) med `qty`, `value`, og kopi av `sku`, `item_name`, `location_code`
+  slik de var da måneden ble lukket.
+
+En lukket måned endres aldri av seg selv. Bevegelser bokført senere med `occurred_at` inne i en lukket måned (tilbakedatert
+justering, sen ordreimport) telles som `backdated_movements` (id > watermark og `occurred_at < cutoff_at`); måneden kan da
+rekalkuleres bevisst — gamle totaler bevares i `history`.
+
+```
+inv.close_month({ period:'YYYY-MM', by?, recalculate?, note?, source? }) → close + action (closed|existing|recalculated)
+     -- idempotent; VALIDATION hvis måneden ikke er over
+inv.close_due_months({ by?, source?, from?, through?, ignore_grace? }) → { closed:['YYYY-MM'…], existing, from, through }
+     -- lukker alle fullførte måneder uten close fra første bevegelse (backtracking); en måned lukkes automatisk
+        først når slutten er minst month_close_grace_hours (2) siden
+
+GET  /month-close                         → { data:[close + prev_total_value, delta_value] nyeste først, first_period, last_completed, missing:[] }
+POST /month-close { period, recalculate?, note? }   → 201 closed | 200 existing/recalculated
+POST /month-close { all_missing: true }   → lukker alle manglende måneder (backfill)
+GET  /month-close/:period?by=sku|location&location=&q=&compare=0&format=csv
+     → { close (inkl. backdated_movements, history), older, newer, previous_period,
+         totals:{rows, qty, value, prev_qty, prev_value, delta_value},
+         rows:[{sku, name, qty, value, unit_cost, locations:{CODE:{qty,value}}, prev_qty, prev_value, delta_qty, delta_value}] }
+     -- 404 NOT_FOUND hvis måneden ikke er lukket; sammenligning når forrige måned er lukket
+GET  /reports/stock-as-of?at=YYYY-MM-DD|ISO&by=&location=&q=&format=csv   → samme radform, levende (ikke fryst);
+     ren dato = slutten av dagen i butikkens tidssone
+POST /sync/month-close                    → cron: close_due_months (source=scheduled). Forslag: "15 2 1 * *" (UTC)
+```
+UI (per butikk): `/inventory/month-close` (liste over måneder, «Close missing months», lager per dato) og
+`/inventory/month-close/:period` (per SKU, ← → gjennom månedene, sammenligning med forrige måned, CSV, rekalkulering).
+
 ---
 
 ## 7. Woo-integrasjon i detalj
@@ -708,7 +748,7 @@ inventory-ledger/
 - Batch/serienummer, FEFO, utløpsdato.
 - Landed cost-fordeling etter mottak (fraktfaktura i ettertid) → v1.1.
 - Stocktake med låsing av lokasjon (v1: telling = adjustment med `reason='telling'`; UI kan bygge tellelister over `/stock`).
-- Historisk verdsetting («lagerverdi per 31.12») — krever replay av lag; v2 (`inv.layer_history` eller daglig snapshot-tabell `inv.valuation_snapshot` som cron).
+- ~~Historisk verdsetting («lagerverdi per 31.12»)~~ — levert i v0.11.0 som månedsslutt + lager per dato (§6.8).
 - Bundles/BOM, produksjon.
 - Multi-valuta på salg (COGS er alltid basisvaluta).
 - Regnskapsintegrasjon (Tripletex-bilag for lagerendringer) — `cogs_correction` og `movement.total_cost` er laget for å kunne mates dit senere.

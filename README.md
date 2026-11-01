@@ -19,6 +19,8 @@ FIFO-varelager (inventory ledger) for WooCommerce-butikker, bygget som et Postgr
 | 6 | Bark: installasjon + UI i bark-internal-web | 🚧 |
 | 7 | Skarpekniver | ⏳ |
 
+Siste versjon: **v0.11.0** — månedsslutt-rapport (antall og verdi per SKU ved månedsslutt, lager per dato), spec §6.8.
+
 ## Kom i gang
 
 ```bash

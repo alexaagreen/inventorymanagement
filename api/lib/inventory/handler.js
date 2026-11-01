@@ -1,4 +1,4 @@
-// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // route({ GET, POST, … }) — shared wrapper for all /api/inventory/* routes:
 //   * method dispatch (405 with Allow header)

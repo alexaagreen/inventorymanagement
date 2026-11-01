@@ -1,4 +1,4 @@
-// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Item sync treats draft, pending and private Woo products as active (so they can be put on a
 // purchase order; trash stays inactive), and the auto path supplements the storefront mirror with

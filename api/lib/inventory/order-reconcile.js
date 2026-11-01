@@ -1,4 +1,4 @@
-// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Order reconcile (v0.9.0): the nightly safety net behind webhooks and the 30-minute backfill.
 // Pulls every Woo order modified in the run's window, re-applies it (idempotent — only real

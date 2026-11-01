@@ -1,4 +1,4 @@
-// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Read queries for the list endpoints. No business logic — only filters,
 // sorting and keyset pagination over the views in schema `inv`.
@@ -467,4 +467,133 @@ export async function itemMovements(sku, f = {}) {
   const { item_id, ...item } = it;
   const { item_id: _x, ...summary } = sum?.j || { item_id: null, ...EMPTY_SUMMARY };
   return { item: { ...item, suppliers }, period: p, summary, ...list };
+}
+
+// ── Month close (v0.11.0) ──────────────────────────────────────────────────
+// A month close is a frozen picture of qty and value per item × location at the end of a
+// month (inv.month_close / inv.month_close_line). Reports read it per SKU (locations summed,
+// with a per-location breakdown) or per SKU × location, and compare with the month before.
+
+const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+export function requirePeriod(v) {
+  const s = String(Array.isArray(v) ? v[0] : v || '').slice(0, 7);
+  if (!PERIOD_RE.test(s)) throw new InventoryError('VALIDATION', 'period must be YYYY-MM', { field: 'period', value: v });
+  return s;
+}
+function shiftPeriod(period, months) {
+  const [y, m] = period.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + months, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+const BACKDATED_SQL = `(select count(*)::int from inv.movement m where m.id > c.movement_watermark and m.occurred_at < c.cutoff_at)`;
+const CLOSE_COLS = `c.id, to_char(c.period, 'YYYY-MM') as period, c.cutoff_at, c.timezone, c.total_qty, c.total_value,
+  c.sku_count, c.line_count, c.negative_lines, c.source, c.closed_by, c.closed_at, c.recalculated_at,
+  c.recalculated_by, c.recalc_count, c.note, ${BACKDATED_SQL} as backdated_movements`;
+
+/** All month closes, newest first, with change vs the month before and the months that are not closed yet. */
+export async function listMonthCloses() {
+  const rows = await sql(
+    `select ${CLOSE_COLS},
+            case when lag(c.period) over w = (c.period - interval '1 month')::date then lag(c.total_value) over w end as prev_total_value
+       from inv.month_close c
+     window w as (order by c.period)
+      order by c.period desc`);
+  for (const r of rows) {
+    r.delta_value = r.prev_total_value == null ? null
+      : Math.round((Number(r.total_value) - Number(r.prev_total_value)) * 100) / 100;
+  }
+  const [o] = await sql(
+    `with b as (
+       select date_trunc('month', (select min(occurred_at) from inv.movement) at time zone inv._tz())::date as first,
+              (date_trunc('month', now() at time zone inv._tz()) - interval '1 month')::date as last
+     )
+     select to_char(b.first, 'YYYY-MM') as first_period, to_char(b.last, 'YYYY-MM') as last_completed,
+            coalesce((select jsonb_agg(to_char(g, 'YYYY-MM') order by g)
+                        from generate_series(b.first, b.last, interval '1 month') g
+                       where not exists (select 1 from inv.month_close c where c.period = g::date)), '[]') as missing
+       from b`);
+  return { data: rows, first_period: o.first_period, last_completed: o.last_completed, missing: o.first_period ? o.missing : [] };
+}
+
+const EMPTY_SRC = `select null::uuid as item_id, null::text as sku, null::text as item_name, null::text as location_code,
+  0::numeric as qty, 0::numeric as value where false`;
+
+/** Shared report: cur/prev are subqueries giving (item_id, sku, item_name, location_code, qty, value). */
+async function stockReport({ cur, prev, params = [], by = 'sku', location, q }) {
+  if (!['sku', 'location'].includes(by)) throw new InventoryError('VALIDATION', 'by must be sku or location', { field: 'by' });
+  const ps = [...params];
+  const p = (v) => { ps.push(v); return `$${ps.length}`; };
+  const perLoc = by === 'location';
+  const locF = location ? `where s.location_code = ${p(String(location).toUpperCase())}` : '';
+  const agg = (src) => `select s.item_id, ${perLoc ? 's.location_code,' : ''} max(s.sku) as sku, max(s.item_name) as item_name,
+         sum(s.qty) as qty, sum(s.value) as value
+         ${perLoc ? '' : `, jsonb_object_agg(s.location_code, jsonb_build_object('qty', s.qty, 'value', s.value)) as locations`}
+    from (${src}) s ${locF} group by s.item_id ${perLoc ? ', s.location_code' : ''}`;
+  const hasPrev = !!prev;
+  const qF = q ? `where (coalesce(c.sku, pv.sku) ilike ${p(`%${q}%`)} or coalesce(c.item_name, pv.item_name) ilike ${p(`%${q}%`)})` : '';
+  const rows = await sql(
+    `with cur as (${agg(cur)}), prev as (${agg(prev || EMPTY_SRC)})
+     select coalesce(c.sku, pv.sku) as sku, coalesce(c.item_name, pv.item_name) as name,
+            ${perLoc ? 'coalesce(c.location_code, pv.location_code) as location,' : ''}
+            coalesce(c.qty, 0) as qty, coalesce(c.value, 0) as value,
+            case when c.qty > 0 then round(c.value / c.qty, 4) end as unit_cost
+            ${perLoc ? '' : `, coalesce(c.locations, '{}'::jsonb) as locations`}
+            ${hasPrev ? `, coalesce(pv.qty, 0) as prev_qty, coalesce(pv.value, 0) as prev_value,
+                          coalesce(c.qty, 0) - coalesce(pv.qty, 0) as delta_qty,
+                          coalesce(c.value, 0) - coalesce(pv.value, 0) as delta_value` : ''}
+       from cur c full join prev pv on pv.item_id = c.item_id ${perLoc ? 'and pv.location_code = c.location_code' : ''}
+       ${qF}
+      order by upper(coalesce(c.sku, pv.sku)) ${perLoc ? ', 3' : ''}`, ps);
+  const sum = (k) => Math.round(rows.reduce((s, r) => s + Number(r[k] || 0), 0) * 1000) / 1000;
+  const totals = { rows: rows.length, qty: sum('qty'), value: Math.round(sum('value') * 100) / 100 };
+  if (hasPrev) {
+    totals.prev_qty = sum('prev_qty');
+    totals.prev_value = Math.round(sum('prev_value') * 100) / 100;
+    totals.delta_value = Math.round((totals.value - totals.prev_value) * 100) / 100;
+  }
+  return { totals, rows };
+}
+
+const lineSrc = (param) => `select l.item_id, l.sku, l.item_name, l.location_code, l.qty, l.value
+  from inv.month_close_line l where l.close_id = ${param}::uuid`;
+
+/** One month close: header, neighbours (for paging back and forth in time) and lines. */
+export async function getMonthClose(periodText, { by = 'sku', location, q, compare = true } = {}) {
+  const period = requirePeriod(periodText);
+  const [c] = await sql(`select ${CLOSE_COLS}, c.history from inv.month_close c where c.period = to_date($1 || '-01', 'YYYY-MM-DD')`, [period]);
+  if (!c) throw new InventoryError('NOT_FOUND', `month ${period} is not closed`, { period });
+  const nb = await sql(
+    `select (select to_char(period, 'YYYY-MM') from inv.month_close where period < $1::date order by period desc limit 1) as older,
+            (select to_char(period, 'YYYY-MM') from inv.month_close where period > $1::date order by period limit 1) as newer,
+            (select id from inv.month_close where period = ($1::date - interval '1 month')::date) as prev_id`,
+    [`${period}-01`]);
+  const prevId = compare ? nb[0].prev_id : null;
+  const out = await stockReport({
+    cur: lineSrc('$1'), prev: prevId ? lineSrc('$2') : null,
+    params: prevId ? [c.id, prevId] : [c.id], by, location, q,
+  });
+  return {
+    close: c,
+    previous_period: prevId ? shiftPeriod(period, -1) : null,
+    older: nb[0].older, newer: nb[0].newer,
+    by, location: location || null, q: q || null, ...out,
+  };
+}
+
+/** Stock as of any point in time, rebuilt from the ledger (not frozen). `at` is exclusive. */
+export async function stockAsOf({ at, by = 'sku', location, q }) {
+  if (!at) throw new InventoryError('VALIDATION', 'at is required', { field: 'at' });
+  // A bare date means the end of that day in the shop's time zone.
+  const [{ cutoff }] = await sql(
+    `select case when $1 ~ '^\\d{4}-\\d{2}-\\d{2}$'
+                 then (($1::date + 1)::timestamp at time zone inv._tz())
+                 else $1::timestamptz end as cutoff`, [String(at)]);
+  const out = await stockReport({
+    cur: `select s.item_id, i.sku, i.name as item_name, loc.code as location_code, s.qty, s.value
+            from inv._stock_as_of($1::timestamptz) s
+            join inv.item i on i.id = s.item_id join inv.location loc on loc.id = s.location_id`,
+    params: [cutoff], by, location, q,
+  });
+  return { at: String(at), cutoff_at: cutoff, by, location: location || null, q: q || null, ...out };
 }

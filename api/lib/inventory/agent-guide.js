@@ -1,11 +1,11 @@
-// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Machine-readable guide for AI agents and scripts: GET /api/inventory/guide (JSON) or
 // GET /api/inventory/guide?format=md (Markdown). Also served at GET /api/inventory. Keep it short, concrete and in sync with the routes.
 
 export const GUIDE = {
   name: 'inventory-ledger API',
-  version: '0.10.0',
+  version: '0.11.0',
   guide: 'GET /api/inventory/guide (JSON) or /api/inventory/guide?format=md',
   about: 'FIFO stock ledger. The ledger is master for stock; WooCommerce is master for products. All amounts are NOK unless a currency is given. Quantities are in the units we stock and sell.',
   auth: {
@@ -36,8 +36,13 @@ export const GUIDE = {
     { method: 'GET', path: '/api/inventory/purchase-orders/:id', returns: 'one PO with lines (qty in units, packs × pack_qty when ordered in packs) and receipts' },
     { method: 'GET', path: '/api/inventory/valuation', returns: 'stock value' },
     { method: 'GET', path: '/api/inventory/reports/cogs', params: 'from, to', returns: 'cost of goods sold' },
+    { method: 'GET', path: '/api/inventory/month-close', returns: 'end-of-month reports: one row per closed month (total_qty, total_value, sku_count, delta_value vs the month before, backdated_movements) + missing months' },
+    { method: 'GET', path: '/api/inventory/month-close/:period', params: 'period=YYYY-MM, by=sku|location, location, q, format=csv',
+      returns: 'qty and value per SKU frozen at the end of the month, with prev_qty/prev_value/delta vs the month before; older/newer for paging' },
+    { method: 'GET', path: '/api/inventory/reports/stock-as-of', params: 'at=YYYY-MM-DD|ISO, by, location, q, format=csv', returns: 'qty and FIFO value per SKU as at any point in time, rebuilt from the ledger (not frozen)' },
   ],
   write: [
+    { method: 'POST', path: '/api/inventory/month-close', body: '{ period: "YYYY-MM", recalculate?: true } | { all_missing: true }', returns: 'close a completed month (or every missing one); recalculate replaces a close and keeps the old totals in history' },
     { method: 'POST', path: '/api/inventory/suppliers/:supplier/match-lines', body: '{ lines: [{ supplier_sku?, gtin?, description?, qty, net_amount? }] }', returns: 'invoice preview (no writes): sku per line, units, unit cost, ready-made po_line; unmatched lines need a sku once' },
     { method: 'POST', path: '/api/inventory/purchase-orders', body: '{ supplier_id, supplier_ref?, lines: [{ sku, qty, unit_cost } | { sku|supplier_sku|gtin, packs, pack_qty?, pack_price }] }', returns: 'the PO (draft)' },
     { method: 'POST', path: '/api/inventory/items/:sku/suppliers', body: '{ supplier, supplier_sku?, pack_qty?, pack_name?, pack_gtin?, preferred? }', returns: 'link an item to a supplier' },
@@ -54,6 +59,7 @@ export const GUIDE = {
     { ask: 'Which products do we buy from Nestlé, and how are they selling?', call: 'GET /api/inventory/suppliers/Nestl%C3%A9%20Norge%20AS/items?from=2026-09-01' },
     { ask: 'What has happened to one product?', call: 'GET /api/inventory/items/LK-DRY-DSV/movements?from=2026-01-01' },
     { ask: 'Everything received from a supplier last month', call: 'GET /api/inventory/suppliers/<supplier>/movements?kind=innkjop&from=2026-09-01&to=2026-10-01' },
+    { ask: 'What was the stock worth at the end of September?', call: 'GET /api/inventory/month-close/2026-09' },
     { ask: 'Enter a supplier invoice', call: '1) GET /suppliers/<supplier> and follow rules[]  2) POST /suppliers/<supplier>/match-lines  3) POST /purchase-orders with the matched po_line[]s' },
   ],
 };

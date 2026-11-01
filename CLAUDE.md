@@ -57,6 +57,7 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `migrations/0096_inv_order_reconcile.sql` | v0.9.0: ordre-avstemming — `order_reconcile_run` (logg, endringer, tellere per kjøring) og `order_reconcile_issue` (avvik med auto-/manuell lukking, ignore). `start/log/finish_order_reconcile`, `check_woo_order`. Spec §7.6 |
 | `migrations/0097_inv_supplier_rules_packs.sql` | v0.10.0: leverandørregler (`supplier.rules` — huskeliste vist på PO/mottak, lest av agenter), `supplier.order_unit` (`unit`/`pack`), pakninger på koblingen (`item_supplier.pack_qty/pack_name/pack_gtin`), PO-linjer i pakker (`packs`, `pack_price`, `supplier_sku`/`gtin` i stedet for `sku`), `match_supplier_lines` (faktura-forhåndsvisning). Spec §6.3.1 |
 | `migrations/0090_inv_catalog_adapter_storefront.sql` | `upsert_items_from_catalog()` fra nettbutikkens speil (felles for alle butikker) |
+| `migrations/0098_inv_month_close.sql` | v0.11.0 månedsslutt: `_stock_as_of(at)`, `month_close`/`month_close_line`, `close_month`, `close_due_months` (spec §6.8) |
 | `scripts/install.mjs` | installerer i butikk: `--api`, `--migrations`, `--check`, `--dry-run`, `--force` |
 | `api/lib/inventory/config.example.js` | mal for butikkens `config.js` (NextAuth `getToken` / `getServerSession`) |
 | `api/lib/inventory/` | HTTP-laget: `db` (egen pool), `rpc` (inv.* → jsonb, feilmapping), `handler` (route-wrapper: auth, 405, Idempotency-Key, feil), `queries` (lister/keyset), `auth`, `errors` (kode→status + norsk brukertekst), `csv`, `client` (fetch-helper for UI), `config` (**butikk-spesifikk, overskrives ikke**) |

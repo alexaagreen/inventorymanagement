@@ -1,4 +1,4 @@
-// inventory-ledger v0.10.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, qBool, qLimit, qList, qDate, isCsv } from '../../../../../lib/inventory/handler';
 import { listMovements, resolveSupplierId } from '../../../../../lib/inventory/queries';
 import { sendCsv } from '../../../../../lib/inventory/csv';
