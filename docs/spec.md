@@ -437,8 +437,37 @@ Tynt lag: valider input (zod), kall RPC via `pg`, returnér JSON. Ingen forretni
 
 - **Idempotens:** skrivende kall støtter `Idempotency-Key`-header; nøkkelen lagres i `inv.idempotency_key (key pk, response jsonb, created_at)` i 24 t og samme svar returneres ved retry. Webhooks/salg er i tillegg idempotente på `(ref_type, ref_id, ref_line)`.
 - **Paginering:** `limit` (default 100, maks 500) + `cursor` (opak, = siste `id`). Svar: `{ data: [...], next_cursor: "…" | null, total?: n }` (`total` bare når `count=1`).
-- **Eksport:** liste-endepunkter støtter `format=csv` (UTF-8, `;`-separert, norsk Excel).
+- **Eksport:** liste- og rapport-endepunkter støtter `format=csv|xlsx|pdf` — én felles standard, se §6.0.1.
 - **Skriv-etter-skriv:** etter vellykket skrivende kall trigges push-worker asynkront (`fetch` til egen `/sync/push-stock` uten å vente), slik at Woo oppdateres innen sekunder uten å vente på cron.
+
+### 6.0.1 Nedlasting — én standard for CSV, Excel og PDF (v0.11.0)
+Modulen eier hvordan data lastes ned. Butikkene og nye endepunkter bygger **aldri** egen CSV/Excel/PDF-kode.
+
+| format | for | innhold |
+|---|---|---|
+| `csv` | maskiner, agenter, import | header = feltnøkler (`sku;name;qty;…`), rå verdier, `;`, desimalkomma, UTF-8 BOM. Uendret siden v0.3 — scripts som leser CSV brekker ikke. |
+| `xlsx` | folk, regnskap | tittel + filterlinjer + «Generert … av …» øverst, overskrift med autofilter og frosne ruter, ekte tall og datoer med tallformat, summeringsrad, A4 tilpasset bredden ved utskrift. |
+| `pdf` | folk, arkiv, revisor | A4 (liggende når tabellen er bred), tittel + filterlinjer, kolonneoverskrift på hver side, sebrarader, summeringsrad, «Side n av N» og generert-tidspunkt i bunntekst. |
+
+Regler:
+1. Ruten gjør bare `const fmt = exportFormat(query)` → hent **hele** utvalget (`all: Boolean(fmt)`) → `sendExport(res, fmt, report, ctx)`
+   (`api/lib/inventory/export.js`). `format=excel` er alias for `xlsx`; ukjent format = 400 `VALIDATION`.
+2. Kolonner hentes fra standardkolonnene med `cols(['sku','name','qty','value', …])`. Samme nøkkel har samme etikett, type
+   (`text|code|int|qty|nok|cost|date|datetime|bool|json`), justering og summering overalt. Trengs en ny kolonne som kan gå
+   igjen → legg den i `STD` i `export.js`; engangskolonner kan overstyres inline (`{ key, nb, en, type, total }`).
+3. `report` = `{ name (filnavn), title {nb,en}, meta [[etikett, verdi]] (aktive filtre; tomme hoppes over), columns,
+   rows, csvColumns? (behold eksisterende CSV-rekkefølge), totals?: false, sheet? }`.
+4. Språk på etiketter: `?lang=nb|en`, ellers `inventoryConfig.exportLanguage` (butikkens `config.js`), ellers `nb`.
+   Tall i PDF: `1 234,56`; tidspunkt i `Europe/Oslo`. Beløp er NOK og står i kolonneetiketten («Verdi (NOK)»).
+5. Ingen nye avhengigheter: XLSX (`xlsx.js`) og PDF (`pdf.js`, standardfontene Helvetica med WinAnsi — dekker æøå)
+   skrives av modulen selv. Butikkene trenger fortsatt bare `pg`.
+6. UI: nedlastingsknapper bygges med `exportUrl(path, params, format)` og `EXPORT_FORMATS` fra `lib/inventory/client.js`
+   (Excel, PDF, CSV i den rekkefølgen), med de samme filtrene som skjermen viser.
+7. Testen `api/tests/export.test.js` sjekker at hvert nedlastbare endepunkt leverer alle tre formatene, og feiler hvis en
+   rute skriver CSV/PDF selv.
+
+Nedlastbare i v0.11.0: `/stock`, `/valuation`, `/movements`, `/items/:sku/movements`, `/suppliers/:s/items`,
+`/suppliers/:s/movements`, `/reports/cogs`, `/reports/stock-as-of`, `/month-close/:period`.
 
 ### 6.1 Varer og status
 ```
@@ -447,18 +476,18 @@ GET  /items/:sku                              → item + status (= én rad fra v
 POST /items/sync                              → upsert_items_from_catalog()   (manuell/cron)
 PATCH /items/:sku   { reorder_point?, reorder_qty?, attributes? }   (Woo-felt kan ikke endres her)
 
-GET  /stock?sku=&skus=A,B,C&location=&negative=1&below_reorder=1&q=&limit=&cursor=&format=csv
+GET  /stock?sku=&skus=A,B,C&location=&negative=1&below_reorder=1&q=&limit=&cursor=&format=csv|xlsx|pdf
      → rader fra v_item_status (eller v_stock_by_location når location= er satt)
 GET  /stock/:sku                              → { sku, on_hand, available, on_order, next_delivery, avg_cost, stock_value,
                                                   last_purchase_cost, last_purchase_at, locations:[{code,on_hand,value,avg_cost}],
                                                   open_consumption_qty, layers:[{id, received_at, qty_remaining, unit_cost, ref}] }
-GET  /valuation?location=&format=csv          → { total_value, rows:[{sku, on_hand, avg_cost, value}] }   (nåtid; historisk = v2)
+GET  /valuation?location=&format=csv|xlsx|pdf          → { total_value, rows:[{sku, on_hand, avg_cost, value}] }   (nåtid; historisk: §6.8)
 ```
 
 ### 6.2 Bevegelser
 ```
 GET /movements?sku=&skus=&type=sale,purchase_receipt&kind=salg|innkjop|justering|flytting&location=
-               &ref_type=&ref_id=&from=&to=&by=&q=&include_reversed=0&limit=&cursor=&format=csv
+               &ref_type=&ref_id=&from=&to=&by=&q=&include_reversed=0&limit=&cursor=&format=csv|xlsx|pdf
     → data:[{ id, occurred_at, sku, item_name, location, type, kind, qty, unit_cost, total_cost, cost_estimated,
               on_hand_after, ref_type, ref_id, ref_line, reference, note, created_by, reversal_of, reversed_by, metadata }]
 GET  /movements/:id                            → movement + consumptions[] (+ layer-detaljer) + cogs_corrections[]
@@ -477,7 +506,67 @@ POST   /purchase-orders/:id/status             { status: 'sent'|'cancelled'|'clo
 POST   /purchase-orders/:id/receive            { receive_purchase_order-input }     → 201 goods_receipt (+ movements)
 GET    /receipts?po_id=&from=&to=              ; GET /receipts/:id ; POST /receipts/:id/reverse { by, note }
 GET    /purchase-orders/on-order?sku=          → [{ sku, po_number, qty_open, expected_at }]
+GET    /fx/norges-bank?currency=JPY&date=      → { currency, rate, quoted, per_units, date, requested_date, source }
 ```
+
+**Hvilke varer som følges (v0.6.0, migrasjon 0091).** `inv.settings.track_stock_mode` = `woo_manage_stock`
+(standard: følger Woo `manage_stock`) eller `all` (alt følges). `track_exclude_category_slugs` = kommaseparerte
+rot-slugs som aldri følges (f.eks. `utleie`); en vare ekskluderes bare når ALLE dens kategorier ligger under
+ekskluderte røtter. Bundles (`products.bundle_components is not null`) følges aldri — ordren eksploderes til
+komponentene. Push sender `manage_stock: true` sammen med `stock_quantity`, så Woo begynner å styre lageret ved
+første push.
+
+`orders_skip_untracked` (v0.6.0, migrasjon 0092, standard `false`): når `true` hoppes ordrelinjer for varer med
+`track_stock=false` over i `apply_woo_order` og listes som `ignored_untracked` i svaret (ikke som `unmatched`). Brukes når
+samme Woo selger varer ledgeren ikke skal telle (utleie, tjenester). Standard `false` beholder T22-oppførselen.
+
+**Speilet oppdateres ved push (v0.8.0, migrasjon 0094).** Når push til Woo lykkes, skriver push-workeren det Woo
+svarte (`stock_quantity`, `stock_status`, `manage_stock`) rett inn i nettbutikkens speil (`public.products` /
+`public.product_variations`, også de samme nøklene i `source_payload`) via `inv.apply_mirror_stock`. Bare lagerfeltene
+røres; resten eies fortsatt av nettbutikkens sync, som senere skriver de samme verdiene. Woo-status mappes
+(`instock`→`in_stock` osv.). Feil her stopper aldri pushen. `inv.settings.mirror_stock_update='false'` slår det av.
+Merk: nettbutikkens egen side-cache (ISR) fornyes fortsatt av Woo-webhooken til sync-eieren.
+
+**Leverandører (v0.7.0, migrasjon 0093).** `inv.supplier` er leverandørregisteret. `inv.item_supplier` kobler varer og
+leverandører mange-til-mange (samme vare kan kjøpes flere steder) med `supplier_sku`, listepris/valuta, leveringstid,
+MOQ og **én `preferred` per vare** («hvem kjøper vi den fra»). En PO kobles til registeret via `supplier_uuid` — satt av
+trigger fra `supplier_id` (register-uuid) eller `supplier_name` (case-insensitivt treff, opprettes hvis den mangler).
+Å bestille en vare fra en leverandør kobler dem automatisk; første kobling blir preferred. «Sist kjøpt fra» og «siste
+pris» lagres ikke, men avledes fra fullførte varemottak (`v_purchase_history`), så en reversering retter dem automatisk:
+`v_item_supplier` (per vare × leverandør) og `v_item_purchase_info` (per vare: preferred + siste kjøp). `get_item_status`
+returnerer `suppliers[]` og `purchase{}`; `/stock` har kolonnene og filtrene `no_supplier=1` / `supplier_id=`.
+```
+GET    /suppliers?q=&active=              POST /suppliers { name, code?, currency?, contact…, default_lead_time_days? }
+GET    /suppliers/:id                     → leverandør + items[] (siste pris herfra) + purchase_orders[]
+PATCH  /suppliers/:id
+POST   /suppliers/import                  { rows:[{ sku, supplier, supplier_sku?, preferred?, list_price?, … }], dry_run?, create_suppliers? }
+GET    /items/:sku/suppliers              POST { supplier, preferred?, supplier_sku?, list_price?, … }   DELETE ?supplier=
+POST   /purchase-orders                   { supplier_id? | supplier_name, … }
+```
+
+**Valuta (v0.5.1).** Ledgeren er alltid i NOK (`base_currency`); PO-er kan være i hvilken som helst valuta,
+og mottaket regner `unit_cost_base = unit_cost × fx_rate + landed_cost_per_unit`. `GET /fx/norges-bank`
+gir Norges Banks kurs (NOK per 1 enhet, siste virkedag på eller før `date`; per-100-noteringer som JPY,
+SEK, DKK er regnet om) **kun som referanse** — UI-et viser den ved kursfeltet på PO og mottak, men
+fyller aldri inn eller bruker den automatisk. Kursen som brukes er alltid den en person skriver inn.
+`502 UPSTREAM` hvis Norges Bank ikke svarer.
+
+### 6.3.1 Leverandørregler og innkjøp i pakker (v0.10.0, migrasjon 0097)
+Mange leverandører fakturerer i pakker/kartonger, ikke i enhetene vi lagerfører. Nestlé: «LK DogDry Du/Sal&Ven (4x2,5kg)»
+antall 1 = én kartong med fire 2,5 kg-sekker → fire sekker på lager.
+
+- `supplier.rules` — huskeliste (array av tekster) per leverandør. Vises på innkjøpsordre og mottak, returneres av
+  `GET /suppliers/:id` og `match-lines` så agenter (grokbot) leser dem før de fører inn. `PATCH` tar array eller tekst (én regel per linje).
+- `supplier.order_unit` — `unit` | `pack`: hva leverandørens fakturaer teller i.
+- `item_supplier.pack_qty` (våre enheter per leverandørpakning, null = ukjent), `pack_name`, `pack_gtin` (pakningens GTIN, som på EHF).
+- PO-linje i pakker: `{ sku | supplier_sku | gtin, packs, pack_qty?, pack_price? | unit_cost, description? }` →
+  `qty = packs × pack_qty`, `unit_cost = pack_price / pack_qty`. `pack_qty`: linjens, ellers koblingens, ellers tolket fra
+  beskrivelsen («(4x2,5kg)» → 4, «(6x400g)» → 6, «(7kg)» → 1), ellers 1. Linjen lagrer `packs`, `pack_qty`, `supplier_sku`.
+  Artikkelnummer sammenlignes uten ledende nuller. Det en linje lærer (pack_qty, artikkelnr., GTIN) lagres på koblingen når
+  den ikke vet det fra før — neste faktura matcher av seg selv.
+- `POST /suppliers/:id/match-lines { lines:[{supplier_sku?, gtin?, description?, qty, net_amount? | unit_price?}] }` —
+  forhåndsviser en faktura uten å skrive: SKU, enheter, kost per enhet, og hva som mangler kobling. Matchede linjers
+  `po_line` kan postes uendret til `POST /purchase-orders`.
 
 ### 6.4 Justering og overføring
 ```
@@ -505,15 +594,72 @@ POST /webhooks/woo-product   product.created/updated/deleted → upsert_item (ka
 POST /sync/push-stock        Drener outbox (maks 100 per kjøring). Cron hvert minutt + trigges etter skriv. Svar { pushed, failed, skipped }.
 POST /sync/reconcile         Sammenligner Woo stock_quantity med available for alle track_stock-items; rapporterer avvik og (med ?fix=1) pusher. Daglig cron.
 POST /sync/import-orders?from=&to=   Backfill: henter ordrer fra Woo REST og kjører apply_woo_order per ordre (idempotent). Brukes ved oppstart og etter nedetid.
-GET  /sync/status            { queue_size, oldest_requested_at, last_push_at, failed_items:[…], last_reconcile }
+GET  /sync/status            { queue_size, oldest_requested_at, last_push_at, failed_items:[…], last_reconcile,
+                               order_reconcile: { last_run, last_completed_at, open_issues } }
+GET  /order-reconcile                 Kjøringer (nyeste først): status, vindu, tellere — uten logg  (v0.9.0, §7.6)
+POST /order-reconcile { days?, from?, to? }   Kjør nå (manuelt). 200 = ferdig kjøring m/ logg; 409 RECONCILE_RUNNING
+GET  /order-reconcile/:id             Én kjøring med log[], changes[] og issues[]
+GET  /order-reconcile/issues?status=open|resolved|ignored|all&kind=&order=
+PATCH /order-reconcile/issues/:id { action: resolve|ignore|reopen, note? }
 ```
+
+### 6.7 For AI-agenter (v0.10.0, kun lesing)
+Agenter (grokbot o.l.) bruker samme API med `Authorization: Bearer <INVENTORY_API_KEY>` og `x-inventory-by: <navn>`.
+- `GET /guide` (`?format=md`) — maskinlesbar oversikt: auth, konvensjoner, endepunkter, oppskrifter. Lim Markdown-versjonen inn i agentens instruks.
+- Leverandør kan adresseres med uuid, kode eller navn (case-insensitivt, URL-kodet) overalt der `:supplier` står.
+- `GET /suppliers/:supplier/items?from=&to=` — alle produkter fra leverandøren: lager, kobling (artikkelnr., pakning,
+  siste pris) og `period_summary` for perioden (standard siste 90 dager): `sold_net`, `received`, `adjusted`,
+  `net_change`, `cogs`, `movements`, `last_movement_at`.
+- `GET /suppliers/:supplier/movements` — bevegelser for alle leverandørens produkter.
+- `GET /items/:sku/movements?from=&to=` — ett produkt: lager, leverandører, `summary` for perioden og bevegelsene (nyeste først, paginert).
+Alle tre støtter `format=csv|xlsx|pdf` (§6.0.1).
+
+### 6.8 Månedsslutt og lager per dato (v0.11.0, migrasjon 0098)
+**Lager per tidspunkt** bygges fra ledgeren selv (`inv._stock_as_of(at)`, `at` eksklusiv):
+antall = Σ `movement.qty` med `occurred_at < at`; verdi = Σ over FIFO-lag hvis opprettende bevegelse skjedde før `at`
+av (`qty_in` − konsum fra bevegelser før `at`) × lagets `unit_cost`. Samme regel som `stock_balance.value` (udekket konsum
+har ingen verdi), så lager per `now()` = `stock_balance` eksakt (t32). Reverseringer bokføres «nå» og endrer ikke fortiden.
+
+**Månedsslutt** fryser bildet ved slutten av en måned i lokal tid (setting `timezone`, standard `Europe/Oslo`; oktober =
+`occurred_at < 1. nov 00:00 Oslo`):
+- `inv.month_close` — én rad per måned (`period` = 1. i måneden, unik): `cutoff_at`, `total_qty`, `total_value`, `sku_count`,
+  `line_count`, `negative_lines`, `source` (`scheduled|manual|backfill`), `closed_by/at`, `recalculated_by/at`, `recalc_count`,
+  `history` (tidligere totaler ved rekalkulering), `movement_watermark` (maks movement-id da linjene ble beregnet).
+- `inv.month_close_line` — én rad per (item × lokasjon) med `qty`, `value`, og kopi av `sku`, `item_name`, `location_code`
+  slik de var da måneden ble lukket.
+
+En lukket måned endres aldri av seg selv. Bevegelser bokført senere med `occurred_at` inne i en lukket måned (tilbakedatert
+justering, sen ordreimport) telles som `backdated_movements` (id > watermark og `occurred_at < cutoff_at`); måneden kan da
+rekalkuleres bevisst — gamle totaler bevares i `history`.
+
+```
+inv.close_month({ period:'YYYY-MM', by?, recalculate?, note?, source? }) → close + action (closed|existing|recalculated)
+     -- idempotent; VALIDATION hvis måneden ikke er over
+inv.close_due_months({ by?, source?, from?, through?, ignore_grace? }) → { closed:['YYYY-MM'…], existing, from, through }
+     -- lukker alle fullførte måneder uten close fra første bevegelse (backtracking); en måned lukkes automatisk
+        først når slutten er minst month_close_grace_hours (2) siden
+
+GET  /month-close                         → { data:[close + prev_total_value, delta_value] nyeste først, first_period, last_completed, missing:[] }
+POST /month-close { period, recalculate?, note? }   → 201 closed | 200 existing/recalculated
+POST /month-close { all_missing: true }   → lukker alle manglende måneder (backfill)
+GET  /month-close/:period?by=sku|location&location=&q=&compare=0&format=csv|xlsx|pdf
+     → { close (inkl. backdated_movements, history), older, newer, previous_period,
+         totals:{rows, qty, value, prev_qty, prev_value, delta_value},
+         rows:[{sku, name, qty, value, unit_cost, locations:{CODE:{qty,value}}, prev_qty, prev_value, delta_qty, delta_value}] }
+     -- 404 NOT_FOUND hvis måneden ikke er lukket; sammenligning når forrige måned er lukket
+GET  /reports/stock-as-of?at=YYYY-MM-DD|ISO&by=&location=&q=&format=csv|xlsx|pdf   → samme radform, levende (ikke fryst);
+     ren dato = slutten av dagen i butikkens tidssone
+POST /sync/month-close                    → cron: close_due_months (source=scheduled). Forslag: "15 2 1 * *" (UTC)
+```
+UI (per butikk): `/inventory/month-close` (liste over måneder, «Close missing months», lager per dato) og
+`/inventory/month-close/:period` (per SKU, ← → gjennom månedene, sammenligning med forrige måned, CSV, rekalkulering).
 
 ---
 
 ## 7. Woo-integrasjon i detalj
 
 ### 7.1 Produktmaster → `inv.item`
-Kilde er butikkens eksisterende Woo→Supabase-speil når det finnes (`public.products` / `public.product_variations` i v3-riggen), ellers Woo REST direkte (`/wc/v3/products?per_page=100` + `/products/:id/variations`). Adapteren `upsert_items_from_catalog()` er den **eneste** butikk-spesifikke SQL-biten og leveres som egen migrasjonsfil per butikk (`0090_catalog_adapter_<butikk>.sql`). Mapping: `sku`, `woo_product_id`, `woo_variation_id`, `name`, `track_stock = manage_stock`, `active = status in ('publish','private')`. Produkter uten SKU hoppes over og rapporteres. Sletting i Woo → `active=false` (aldri DELETE; bevegelser må bevares).
+Kilde er butikkens eksisterende Woo→Supabase-speil når det finnes (`public.products` / `public.product_variations` i v3-riggen), ellers Woo REST direkte (`/wc/v3/products?per_page=100` + `/products/:id/variations`). Adapteren `upsert_items_from_catalog()` er den **eneste** butikk-spesifikke SQL-biten og leveres som egen migrasjonsfil per butikk (`0090_catalog_adapter_<butikk>.sql`). Mapping: `sku`, `woo_product_id`, `woo_variation_id`, `name`, `track_stock = manage_stock`, `active = status in ('publish','private','draft','pending')` (trash = inaktiv; draft/pending har alltid `track_stock=false`, så lager pushes aldri for dem — de kan likevel legges på innkjøpsordre). Speilet har bare publiserte produkter, så auto-synken henter draft/pending/private fra Woo REST etter adapteren (`deactivate_missing=false`). Produkter uten SKU hoppes over og rapporteres. Sletting i Woo → `active=false` (aldri DELETE; bevegelser må bevares).
 
 Webhook `product.*` → `upsert_item` i sanntid; `/items/sync` som daglig sikkerhetsnett (cron 04:10, samme slot som dagens `sync-products`).
 
@@ -544,6 +690,36 @@ Bruk `lib/woo.js` (`wooFetch`/`wooPost`) og env `WOOCOMMERCE_STORE_URL` / `_CONS
 
 ### 7.5 Reconcile
 Daglig: hent alle Woo-produkter/variasjoner med `manage_stock`, sammenlign `stock_quantity` mot `available`. Avvik rapporteres (Slack `#lager`) og rettes med `?fix=1` ved å legge item i push-køen — **aldri** ved å skrive Woo-verdien inn i ledgeren. Ledgeren er master.
+
+### 7.6 Ordre-avstemming (v0.9.0, migrasjon 0096)
+Webhook + backfill hvert 30. min (90 min vindu) er primærveien. Ordre-avstemmingen er sikkerhetsnettet: daglig cron
+(og «Run now» i UI) henter **alle** Woo-ordrer endret i vinduet (`status=any`, `modified_after`/`modified_before`), kjører
+hver gjennom `apply_woo_order` på nytt (idempotent — bare reelle forskjeller bokføres) og sammenligner Woo med ledgeren
+(`check_woo_order`). Ledger-ordrer som trakk lager, ble sist sett endret i vinduet og *ikke* kom med i listen, slås opp
+enkeltvis: 404 = slettet i Woo, `trash` = følger `restore_statuses` (lager tilbake).
+
+**Vindu:** siste `order_reconcile_days` (7), utvidet bakover til slutten av siste fullførte kjøring (fanger lange
+nedetider), maks `order_reconcile_max_days` (35). En kjøring som går tom for tid ender som `partial`; neste kjøring dekker resten.
+
+**Alt lagres i databasen** så UI kan vise det:
+- `inv.order_reconcile_run` — én rad per kjøring: `trigger` (cron/manual), `run_by`, `status`
+  (`running|ok|issues|partial|failed`), vindu, tellere, `log` (`[{at, level, message}]`, skrives fortløpende per side),
+  `changes` (ordrer der noe ble bokført), `issue_ids`, `error`. En kjøring som aldri ble ferdig lukkes som `failed`
+  av neste start (etter 30 min). Bare én kjøring om gangen (`RECONCILE_RUNNING` 409).
+- `inv.order_reconcile_issue` — avvik som krever et menneske. Én åpen rad per (kind, ordre, linje/refusjon); sett igjen →
+  `seen_count++`. Rettes ikke automatisk:
+
+| kind | betyr |
+|---|---|
+| `unmatched_sku` | ordrelinje uten vare i ledgeren — lager ble aldri trukket |
+| `line_mismatch` | ledgerens netto for en linje ≠ det Woo-ordren tilsier (skal ikke skje; tilstandsmaskinen har ikke konvergert) |
+| `refund_missing_in_woo` | ledgeren har bokført en refusjon som ikke lenger finnes i Woo (slettet) |
+| `order_missing_in_woo` | ledgeren har trukket for en ordre Woo ikke lenger har (slettet permanent) |
+| `apply_failed` | `apply_woo_order` feilet (melding i `details`) |
+
+Livsløp: en åpen sak for en ordre som avstemmes uten at saken rapporteres igjen → `resolution='auto'`. Manuelt
+`resolve` lukker (rapporteres som ny hvis problemet består); `ignore` lukker for godt (samme kind/ordre/ref rapporteres aldri
+igjen); `reopen` åpner igjen.
 
 ---
 
@@ -601,7 +777,7 @@ inventory-ledger/
 - Batch/serienummer, FEFO, utløpsdato.
 - Landed cost-fordeling etter mottak (fraktfaktura i ettertid) → v1.1.
 - Stocktake med låsing av lokasjon (v1: telling = adjustment med `reason='telling'`; UI kan bygge tellelister over `/stock`).
-- Historisk verdsetting («lagerverdi per 31.12») — krever replay av lag; v2 (`inv.layer_history` eller daglig snapshot-tabell `inv.valuation_snapshot` som cron).
+- ~~Historisk verdsetting («lagerverdi per 31.12»)~~ — levert i v0.11.0 som månedsslutt + lager per dato (§6.8).
 - Bundles/BOM, produksjon.
 - Multi-valuta på salg (COGS er alltid basisvaluta).
 - Regnskapsintegrasjon (Tripletex-bilag for lagerendringer) — `cogs_correction` og `movement.total_cost` er laget for å kunne mates dit senere.
@@ -725,7 +901,7 @@ Mønstre per flate (Skarpekniver som eksempel):
 | Sett lager til 0 (`zeroStock`) | `POST /adjustments { lines:[{sku, new_qty:0}] }` | Samme ≤3-regel håndheves i UI/case-koden som før (ledgeren bryr seg ikke). |
 | Innkjøp (`supplier-reorder`, `pending-po`, JBT auto-PO) | `POST /purchase-orders` (draft) → `POST /:id/status {sent}` | `pending_po` beholdes for leverandør-token-flyten; `markSent` kaller nå `POST /purchase-orders` i stedet for `createPurchaseOrder` i Cin7, og lagrer `inventory_po_id`. |
 | Varemottak (`/varemottak`) | `GET /purchase-orders?status=sent,partially_received` → `GET /:id` → `POST /:id/receive` | `goods_receipt_confirmations` (drift bekrefter linje for linje) beholdes som arbeidsflate; «Fullfør mottak» sender bekreftede linjer som `lines[]` med `qty` + ev. overstyrt `unit_cost`. Avvik-Slack som før. Delmottak = flere receive-kall. |
-| Movements (`/lager > Vareflyt`) | `GET /movements?sku=&type=&from=&to=&cursor=` | Erstatter `cin7-movements.js`. `kind` for fargekoding, `on_hand_after` som saldo-kolonne, «Last mer» på `next_cursor`, «Eksporter» = samme URL + `format=csv`. |
+| Movements (`/lager > Vareflyt`) | `GET /movements?sku=&type=&from=&to=&cursor=` | Erstatter `cin7-movements.js`. `kind` for fargekoding, `on_hand_after` som saldo-kolonne, «Last mer» på `next_cursor`, «Eksporter» = `exportUrl('/movements', filtre, 'xlsx'|'pdf'|'csv')` (§6.0.1). |
 | Stock adjustments-liste (`/stock-adjustments`) | `GET /adjustments` → `GET /adjustments/:id` → `POST /:id/reverse` | Erstatter `cin7-stock-adjustments.js`; ingen lazy-henting lenger (alt er lokalt). |
 | Overføring lager → butikk | `POST /transfers` | Ny side/fane; refill-flyten (`refill-butikk-daily`) kan senere poste transfers automatisk når plukket er bekreftet. |
 | Lager-helse (dashboard) | `GET /stock?negative=1`, `GET /stock?below_reorder=1`, `GET /sync/status` | Kort på forsiden: negative varer (udekket konsum), under bestillingspunkt, push-kø/feil. |

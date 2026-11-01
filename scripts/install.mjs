@@ -1,17 +1,17 @@
 #!/usr/bin/env node
-// inventory-ledger installer — kopierer modulen inn i butikkens repoer.
+// inventory-ledger installer — copies the module into the shop's repos.
 //
 //   node scripts/install.mjs --api ../bark-internal-web --migrations ../barkavenue/supabase/migrations
-//   node scripts/install.mjs --api ../bark-internal-web --check          # CI i butikken: feiler ved lokale endringer
-//   node scripts/install.mjs ... --dry-run                               # vis hva som ville skjedd
+//   node scripts/install.mjs --api ../bark-internal-web --check          # CI in the shop: fails on local changes
+//   node scripts/install.mjs ... --dry-run                               # show what would happen
 //
-// Regler (CLAUDE.md): dette repoet er master. Kopierte filer redigeres aldri i butikken.
-//   --api <dir>         internal-web: lib/inventory/* + pages/api/inventory/** (+ config.js én gang)
-//   --migrations <dir>  nettbutikkens supabase/migrations: <timestamp>_<NNNN>_inv_*.sql
-//                       (inv bor ALLTID i samme Supabase som nettbutikken)
-//   --force             overskriv kopierte filer som er endret lokalt
+// Rules (CLAUDE.md): this repo is master. Copied files are never edited in the shop.
+//   --api <dir>         internal-web: lib/inventory/* + pages/api/inventory/** (+ config.js once)
+//   --migrations <dir>  the storefront's supabase/migrations: <timestamp>_<NNNN>_inv_*.sql
+//                       (inv ALWAYS lives in the same Supabase as the storefront)
+//   --force             overwrite copied files that have been changed locally
 //
-// Låsefiler: <api>/inventory-ledger.lock.json og <migrations>/../inventory-ledger.migrations.lock.json
+// Lock files: <api>/inventory-ledger.lock.json and <migrations>/../inventory-ledger.migrations.lock.json
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -100,14 +100,14 @@ function installApi() {
     log(`  ${exists ? '↻' : '+'} ${f.dest}`);
   }
 
-  // Filer som var installert før, men er fjernet i modulen
+  // Files that were installed before but have been removed from the module
   for (const old of Object.keys(lock.files || {})) {
     if (!newLock.files[old] && fs.existsSync(path.join(API, old))) {
       log(`  ! removed upstream: ${old} — delete it in the shop repo`);
     }
   }
 
-  // config.js én gang
+  // config.js once
   const cfg = path.join(API, 'lib/inventory/config.js');
   if (!fs.existsSync(cfg)) {
     if (CHECK) { log('  ✗ missing   lib/inventory/config.js'); problems++; }

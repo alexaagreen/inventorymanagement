@@ -1,7 +1,7 @@
-// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
-// Error codes → HTTP status (spec §6.0) and user-facing text for the UI.
-// Norwegian copy lives in userMessage(err, 'no'). Isomorphic: no server imports, safe in React.
+// Error codes → HTTP status (spec §6.0) and Norwegian/English user-facing text for the UI.
+// Isomorphic: no server imports, safe in React.
 
 export const STATUS_BY_CODE = {
   VALIDATION: 400,
@@ -9,17 +9,20 @@ export const STATUS_BY_CODE = {
   ITEM_NOT_FOUND: 404,
   LOCATION_NOT_FOUND: 404,
   PO_NOT_FOUND: 404,
+  SUPPLIER_NOT_FOUND: 404,
   NOT_FOUND: 404,
   METHOD_NOT_ALLOWED: 405,
   DUPLICATE_REF: 409,
   LAYER_CONSUMED: 409,
   PO_LOCKED: 409,
   ALREADY_REVERSED: 409,
+  RECONCILE_RUNNING: 409,
   IMMUTABLE: 409,
   INSUFFICIENT_STOCK: 422,
   COST_REQUIRED: 422,
   OVER_RECEIPT: 422,
   PO_STATUS_INVALID: 422,
+  UPSTREAM: 502,
   INTERNAL: 500,
 };
 
@@ -36,7 +39,7 @@ export class InventoryError extends Error {
   }
 }
 
-/** Turn a pg error from inv._raise() (P0001 "CODE: text", detail=json) into an InventoryError. */
+/** Converts a pg error from inv._raise() (P0001 "CODE: text", detail=json) into an InventoryError. */
 export function fromPgError(err) {
   if (err instanceof InventoryError) return err;
   if (err && err.code === 'P0001') {
@@ -47,7 +50,7 @@ export function fromPgError(err) {
       return new InventoryError(m[1], m[2], details);
     }
   }
-  // Invalid input that Postgres itself rejects (uuid, number, date, enum)
+  // Invalid input rejected by Postgres itself (uuid, number, date, enum)
   if (err && ['22P02', '22007', '22008', '22003', '23502', '23514'].includes(err.code)) {
     return new InventoryError('VALIDATION', err.message, { pg_code: err.code });
   }
@@ -55,6 +58,7 @@ export function fromPgError(err) {
 }
 
 const TEXT = {
+  // Intentionally Norwegian: user-facing strings for shops whose UI is in Norwegian.
   no: {
     INSUFFICIENT_STOCK: (d) => d.on_hand != null
       ? `Ikke nok på lager (${Number(d.on_hand)} på ${d.location || 'lokasjonen'}, prøvde å ta ${Number(d.requested)})`
@@ -65,8 +69,12 @@ const TEXT = {
     ALREADY_REVERSED: () => 'Dette er allerede reversert',
     PO_LOCKED: () => 'Innkjøpsordren er låst for endringer',
     PO_STATUS_INVALID: () => 'Ugyldig statusendring for innkjøpsordren',
-    ITEM_NOT_FOUND: (d) => `Fant ikke varen ${d.sku || ''}`.trim(),
+    ITEM_NOT_FOUND: (d) => (d.supplier_sku || d.gtin) && !d.sku
+      ? `Leverandørvaren ${d.supplier_sku || d.gtin}${d.description ? ` (${d.description})` : ''} er ikke koblet til en av våre varer — velg SKU`
+      : `Fant ikke varen ${d.sku || ''}`.trim(),
     LOCATION_NOT_FOUND: (d) => `Fant ikke lokasjonen ${d.location || ''}`.trim(),
+    SUPPLIER_NOT_FOUND: (d) => `Fant ikke leverandøren ${d.supplier || ''}`.trim(),
+    RECONCILE_RUNNING: () => 'En ordreavstemming kjører allerede — vent til den er ferdig',
     UNAUTHORIZED: () => 'Du er ikke logget inn',
     fallback: 'Noe gikk galt',
   },
@@ -80,16 +88,20 @@ const TEXT = {
     ALREADY_REVERSED: () => 'This has already been reversed',
     PO_LOCKED: () => 'This purchase order is locked for changes',
     PO_STATUS_INVALID: () => 'That status change is not allowed for this purchase order',
-    ITEM_NOT_FOUND: (d) => `Item ${d.sku || ''} not found`.replace('  ', ' '),
+    ITEM_NOT_FOUND: (d) => (d.supplier_sku || d.gtin) && !d.sku
+      ? `Supplier item ${d.supplier_sku || d.gtin}${d.description ? ` (${d.description})` : ''} is not linked to one of our SKUs — choose the SKU`
+      : `Item ${d.sku || ''} not found`.replace('  ', ' '),
     LOCATION_NOT_FOUND: (d) => `Location ${d.location || ''} not found`.replace('  ', ' '),
+    SUPPLIER_NOT_FOUND: (d) => `Supplier ${d.supplier || ''} not found`.replace('  ', ' '),
+    RECONCILE_RUNNING: () => 'An order reconcile is already running — wait for it to finish',
     UNAUTHORIZED: () => 'You are not signed in',
     fallback: 'Something went wrong',
   },
 };
 
 /**
- * User-facing text for an API error. `err` is { code, message, details }.
- * lang: 'no' (default, for Norwegian UIs) or 'en'.
+ * User-facing text for an error from the API. `err` is { code, message, details }.
+ * lang: 'no' (default) or 'en'.
  */
 export function userMessage(err, lang = 'no') {
   const t = TEXT[lang] || TEXT.no;

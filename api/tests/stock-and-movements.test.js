@@ -136,7 +136,7 @@ describe('stock + movements', () => {
     expect(v.body.total_value).toBeGreaterThanOrEqual(1800);
     const c = await call(cogs, { query: { group_by: 'sku' } });
     expect(c.status).toBe(200);
-    expect(c.body.rows.find((r) => r.key === 'SM-1')).toBeUndefined(); // salget ble reversert
+    expect(c.body.rows.find((r) => r.key === 'SM-1')).toBeUndefined(); // the sale was reversed
     const bad = await call(cogs, { query: { group_by: 'x' } });
     expect(bad.status).toBe(400);
     const l = await call(locations);

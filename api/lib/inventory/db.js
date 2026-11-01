@@ -1,8 +1,8 @@
-// inventory-ledger v0.6.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Dedicated pg pool for the database where schema `inv` lives.
-//   INVENTORY_DATABASE_URL — REQUIRED. Always points at the shop's (storefront) Supabase,
-//   transaction pooler port 6543. No fallback to DATABASE_URL: in internal-web that usually
+//   INVENTORY_DATABASE_URL — REQUIRED. Always points at the shop's (storefront's) Supabase,
+//   transaction pooler 6543. No fallback to DATABASE_URL: in internal-web it typically
 //   points at a different database, and a silent fallback would write stock to the wrong place.
 // SSL: Supabase requires TLS. Local/CI URLs (localhost, unix socket) run without it.
 import { Pool } from 'pg';
