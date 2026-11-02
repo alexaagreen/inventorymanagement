@@ -877,6 +877,19 @@ Woo reduserer også sitt eget `stock_quantity` ved betaling — det er uproblema
 
 Bruk `lib/woo.js` (`wooFetch`/`wooPost`) og env `WOOCOMMERCE_STORE_URL` / `_CONSUMER_KEY` / `_CONSUMER_SECRET` som allerede er konvensjon i begge internal-webs (aldri hardkodede nøkler — se CLAUDE.md).
 
+**Arbeidsmåte fra v0.11.0 (migrasjon 0099, etter Bark-hendelsen 26.10.2026)** — en treg Woo (plugin som eksporterer
+produktet ved hver lagring) fikk én batch til å vare lenger enn funksjonsgrensen; samme batch ble skrevet på nytt hvert
+2.–3. minutt, varianter ble aldri nådd og POS-salg i Woo ble overskrevet. Workeren skal derfor:
+- jobbe innenfor et **tidsbudsjett** (`INVENTORY_PUSH_BUDGET_MS`, 40 s) og **gi fra seg** claims den ikke rakk (`release_stock_push`);
+- skrive i **små, adaptive biter** (start `INVENTORY_PUSH_CHUNK` 10, maks 50, mål ~8 s per skriv) og markere hver bit straks den er ferdig;
+- ta enkle produkter og varianter **flettet etter alder** (eldste forespørsel først), så varianter ikke sultes ut;
+- **aldri prøve en skriv på nytt etter timeout** (`INVENTORY_PUSH_WRITE_TIMEOUT_MS`, 20 s) — Woo kan fullføre den; varene får backoff;
+- **lese Woo først** (`GET …?include=…&_fields=id,stock_quantity,manage_stock`) og markere varer Woo allerede har som ferdige
+  uten å lagre (ingen plugin-hooks, ingen overskriving);
+- når Woo er **lavere enn vår siste push og lavere enn ledgeren** (salg i Woo/POS som ikke har nådd ledgeren ennå):
+  vente `push_foreign_change_grace_minutes` (10) før ledgerverdien skrives likevel (`defer_stock_push`, `deferred_items` i `/sync/status`).
+Svar: `{ pushed, unchanged, deferred, failed, released, timeouts, chunks, chunk_size, budget_exhausted, ms }`.
+
 ### 7.5 Reconcile
 Daglig: hent alle Woo-produkter/variasjoner med `manage_stock`, sammenlign `stock_quantity` mot `available`. Avvik rapporteres (Slack `#lager`) og rettes med `?fix=1` ved å legge item i push-køen — **aldri** ved å skrive Woo-verdien inn i ledgeren. Ledgeren er master.
 

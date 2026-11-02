@@ -9,10 +9,21 @@
 // Woo → ledger: item sync (products/variations → inv.item).
 // The ledger is master: reconcile NEVER corrects the ledger from Woo — only the other way round.
 import { rpc, sql } from './rpc.js';
-import { wooConfigured, wooPost, wooGetAll, WooError } from './woo.js';
+import { wooConfigured, wooGetAll, wooRequest, WooError } from './woo.js';
 import { inventoryConfig } from './config.js';
 
-const BATCH = 100;
+// ── Push worker limits (v0.11.0) ─────────────────────────────────────────────
+// A run must finish well inside the function limit (cron routes: maxDuration 60 s), so it works
+// in a time budget and in chunks that adapt to how fast Woo saves. Env overrides per shop.
+const env = (k, d) => (Number.isFinite(Number(process.env[k])) && process.env[k] !== '' ? Number(process.env[k]) : d);
+export const PUSH_LIMITS = {
+  budgetMs: env('INVENTORY_PUSH_BUDGET_MS', 40000),       // stop starting new chunks after this
+  writeTimeoutMs: env('INVENTORY_PUSH_WRITE_TIMEOUT_MS', 20000), // one batch write; never retried on timeout
+  readTimeoutMs: env('INVENTORY_PUSH_READ_TIMEOUT_MS', 10000),
+  chunkStart: env('INVENTORY_PUSH_CHUNK', 10),             // first chunk size; then adapts
+  chunkMax: env('INVENTORY_PUSH_CHUNK_MAX', 50),
+  targetChunkMs: env('INVENTORY_PUSH_TARGET_CHUNK_MS', 8000), // aim for writes of about this long
+};
 
 function pushEnabledFromConfig() {
   return inventoryConfig?.wooPush !== false;
@@ -22,12 +33,6 @@ async function pushEnabled() {
   if (!pushEnabledFromConfig() || !wooConfigured()) return false;
   const [row] = await sql(`select inv._setting_bool('woo_push_enabled') as on`);
   return Boolean(row?.on);
-}
-
-function chunk(arr, n) {
-  const out = [];
-  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
-  return out;
 }
 
 async function markAll(rows, ok, error) {
@@ -76,47 +81,116 @@ async function updateMirror(kind, rows) {
   }
 }
 
+/** Current stock in Woo for a slice (cheap list read — no product save). Map id → { qty, managed } or null on failure. */
+async function readWooStock(group, rows) {
+  const idKey = group.parent ? 'woo_variation_id' : 'woo_product_id';
+  const path = group.parent ? `/products/${group.parent}/variations` : '/products';
+  try {
+    const { data } = await wooRequest('GET', path, {
+      params: { include: rows.map((r) => r[idKey]).join(','), per_page: 100, status: group.parent ? undefined : 'any', _fields: 'id,stock_quantity,manage_stock' },
+      retries: 1, timeoutMs: PUSH_LIMITS.readTimeoutMs,
+    });
+    const m = new Map();
+    for (const p of Array.isArray(data) ? data : []) m.set(String(p.id), { qty: p.stock_quantity, managed: p.manage_stock === true });
+    return m;
+  } catch (err) {
+    console.warn('[inventory] push pre-read failed, writing without it:', err.message);
+    return null;
+  }
+}
+
 /**
- * Drain the push queue. Simple products: POST /products/batch.
- * Variations: POST /products/:parent/variations/batch (one per parent).
+ * Drain the push queue (spec §7.4) without ever getting stuck:
+ *   - time budget: no new chunk is started after budgetMs; unprocessed claims are released at once
+ *   - products and variations interleaved by age (oldest request first), so variations are never starved
+ *   - small chunks that adapt to Woo's save speed; each chunk is marked as soon as it returns
+ *   - a write that times out is not retried (Woo may still finish it); the items back off and the next
+ *     run's pre-read sees whether Woo got the value
+ *   - pre-read: items Woo already holds are marked done without a save (no plugin hooks, no rewrite)
+ *   - Woo lower than our last push and lower than the ledger = a sale in Woo/POS the ledger has not seen
+ *     yet → wait push_foreign_change_grace_minutes before writing the ledger value anyway
+ * Simple products: POST /products/batch. Variations: POST /products/:parent/variations/batch.
  */
-export async function pushStock({ limit = 100 } = {}) {
+export async function pushStock({ limit = 100, budgetMs = PUSH_LIMITS.budgetMs } = {}) {
   if (!(await pushEnabled())) return { pushed: 0, failed: 0, skipped: 0, disabled: true };
+  const t0 = Date.now();
   const due = await rpc('list_stock_push_due', [Math.min(Math.max(limit, 1), 500)]);
   if (!due?.length) return { pushed: 0, failed: 0, skipped: 0 };
+  const [g] = await sql(`select coalesce(nullif(inv._setting('push_foreign_change_grace_minutes'), '')::int, 10) as grace`);
+  const graceMin = Number(g?.grace ?? 10);
 
-  const simple = due.filter((r) => r.woo_variation_id == null);
-  const byParent = new Map();
-  for (const r of due.filter((x) => x.woo_variation_id != null)) {
-    const k = String(r.woo_product_id);
-    if (!byParent.has(k)) byParent.set(k, []);
-    byParent.get(k).push(r);
+  // Groups: all simple products together, variations per parent. Each keeps request order.
+  const groups = new Map();
+  for (const r of due) {
+    const key = r.woo_variation_id == null ? 'simple' : `v:${r.woo_product_id}`;
+    if (!groups.has(key)) groups.set(key, { parent: r.woo_variation_id == null ? null : String(r.woo_product_id), rows: [] });
+    groups.get(key).rows.push(r);
   }
+  const oldest = (gr) => new Date(gr.rows[0]?.requested_at || 0).getTime();
 
-  let pushed = 0; let failed = 0; let mirrored = 0;
-  for (const part of chunk(simple, BATCH)) {
+  const out = { pushed: 0, unchanged: 0, deferred: 0, failed: 0, released: 0, skipped: 0, mirrored: 0, chunks: 0, timeouts: 0 };
+  let size = Math.max(1, Math.min(PUSH_LIMITS.chunkStart, PUSH_LIMITS.chunkMax));
+  const pending = () => [...groups.values()].filter((gr) => gr.rows.length);
+
+  while (pending().length) {
+    if (Date.now() - t0 > budgetMs) { out.budget_exhausted = true; break; }
+    const group = pending().sort((a, b) => oldest(a) - oldest(b))[0];
+    const slice = group.rows.splice(0, size);
+    const idKey = group.parent ? 'woo_variation_id' : 'woo_product_id';
+    out.chunks++;
+
+    // 1) What does Woo hold now?
+    const current = await readWooStock(group, slice);
+    const write = []; const same = []; const defer = [];
+    for (const r of slice) {
+      const w = current?.get(String(r[idKey]));
+      const target = Number(r.qty_to_push);
+      if (w && w.managed && Number(w.qty) === target) { same.push({ r, w }); continue; }
+      const foreignDrop = w && w.managed && r.last_pushed_qty != null && w.qty != null
+        && Number(w.qty) < Number(r.last_pushed_qty) && Number(w.qty) < target;
+      const waited = r.deferred_since ? (Date.now() - new Date(r.deferred_since).getTime()) / 60000 : 0;
+      if (foreignDrop && graceMin > 0 && waited < graceMin) { defer.push(r); continue; }
+      write.push(r);
+    }
+    for (const { r } of same) await rpc('mark_stock_pushed', [r.item_id, r.qty_to_push, true, null]);
+    out.unchanged += same.length;
+    if (same.length) {
+      out.mirrored += await updateMirror(group.parent ? 'variations' : 'products',
+        same.map(({ r, w }) => ({ id: Number(r[idKey]), stock_quantity: Number(w.qty), stock_status: null, manage_stock: true })));
+    }
+    if (defer.length) {
+      await rpc('defer_stock_push', [defer.map((r) => r.item_id), Math.min(graceMin, 5),
+        `Woo is lower than our last push (a sale in Woo/POS not yet in the ledger?) — waiting up to ${graceMin} min before writing`]);
+      out.deferred += defer.length;
+    }
+    if (!write.length) continue;
+
+    // 2) Write the rest — one call, no retry on timeout
+    const path = group.parent ? `/products/${group.parent}/variations/batch` : '/products/batch';
+    const started = Date.now();
     try {
-      const res = await wooPost('/products/batch', { update: part.map((r) => ({ id: r.woo_product_id, manage_stock: true, stock_quantity: Number(r.qty_to_push) })) });
-      const o = await applyBatchResult(part, res, 'woo_product_id');
-      pushed += o.pushed; failed += o.failed; mirrored += o.mirrored;
+      const { data } = await wooRequest('POST', path, {
+        body: { update: write.map((r) => ({ id: r[idKey], manage_stock: true, stock_quantity: Number(r.qty_to_push) })) },
+        retries: 0, timeoutMs: PUSH_LIMITS.writeTimeoutMs,
+      });
+      const o = await applyBatchResult(write, data, idKey);
+      out.pushed += o.pushed; out.failed += o.failed; out.mirrored += o.mirrored;
+      // Adapt: aim for writes of about targetChunkMs
+      const perItem = (Date.now() - started) / write.length;
+      size = Math.max(1, Math.min(PUSH_LIMITS.chunkMax, Math.floor(PUSH_LIMITS.targetChunkMs / Math.max(perItem, 1))));
     } catch (err) {
-      await markAll(part, false, err.message); failed += part.length;
+      if (err.timeout) out.timeouts++;
+      await markAll(write, false, err.message); out.failed += write.length;
+      size = Math.max(1, Math.floor(size / 2));
     }
   }
-  for (const [parent, rows] of byParent) {
-    for (const part of chunk(rows, BATCH)) {
-      try {
-        const res = await wooPost(`/products/${parent}/variations/batch`, {
-          update: part.map((r) => ({ id: r.woo_variation_id, manage_stock: true, stock_quantity: Number(r.qty_to_push) })),
-        });
-        const o = await applyBatchResult(part, res, 'woo_variation_id');
-        pushed += o.pushed; failed += o.failed; mirrored += o.mirrored;
-      } catch (err) {
-        await markAll(part, false, err.message); failed += part.length;
-      }
-    }
-  }
-  return { pushed, failed, skipped: 0, mirrored };
+
+  // Give back what this run did not get to — the next run picks it up immediately.
+  const left = [...groups.values()].flatMap((gr) => gr.rows.map((r) => r.item_id));
+  if (left.length) out.released = Number(await rpc('release_stock_push', [left])) || left.length;
+  out.ms = Date.now() - t0;
+  out.chunk_size = size;
+  return out;
 }
 
 /**

@@ -8,6 +8,8 @@ export function startWooMock() {
     refunds: {},             // `${orderId}:${refundId}` → refund
     orders: [],              // for /orders-backfill
     failIds: new Set(),      // ids that should fail in batch
+    writeDelayMsPerItem: 0,  // slow saves (e.g. a plugin exporting each product on save)
+    writes: {},              // id → number of times a batch wrote it
     requests: [],
   };
   const server = http.createServer((req, res) => {
@@ -29,21 +31,27 @@ export function startWooMock() {
         send(200, arr.slice((page - 1) * per, page * per), { 'x-wp-totalpages': String(total), 'x-wp-total': String(arr.length) });
       };
       let m;
-      if (req.method === 'GET' && path === '/products') return paged(state.products);
-      if (req.method === 'GET' && (m = /^\/products\/(\d+)\/variations$/.exec(path))) return paged(state.variations[m[1]] || []);
+      const include = u.searchParams.get('include');
+      const inc = (arr) => (include ? arr.filter((x) => include.split(',').includes(String(x.id))) : arr);
+      if (req.method === 'GET' && path === '/products') return paged(inc(state.products));
+      if (req.method === 'GET' && (m = /^\/products\/(\d+)\/variations$/.exec(path))) return paged(inc(state.variations[m[1]] || []));
       if (req.method === 'GET' && (m = /^\/products\/(\d+)$/.exec(path))) return send(200, state.products.find((p) => String(p.id) === m[1]) || {});
       if (req.method === 'POST' && (path === '/products/batch' || /^\/products\/\d+\/variations\/batch$/.test(path))) {
-        const update = (json.update || []).map((x) => {
+        const apply = () => (json.update || []).map((x) => {
           if (state.failIds.has(Number(x.id))) return { id: x.id, error: { code: 'woocommerce_rest_invalid_id', message: 'Invalid ID.' } };
           const target = path === '/products/batch'
             ? state.products.find((p) => p.id === x.id)
             : Object.values(state.variations).flat().find((v) => v.id === x.id);
           if (target) { target.stock_quantity = x.stock_quantity; target.manage_stock = x.manage_stock ?? target.manage_stock; }
           // Like Woo: the response carries the saved object, incl. the derived stock_status.
+          state.writes[x.id] = (state.writes[x.id] || 0) + 1;
           return { id: x.id, stock_quantity: x.stock_quantity, manage_stock: x.manage_stock ?? true,
                    stock_status: x.stock_quantity > 0 ? 'instock' : 'outofstock' };
         });
-        return send(200, { update });
+        const delay = state.writeDelayMsPerItem * (json.update || []).length;
+        // Like PHP: the save finishes even when the client has given up waiting.
+        if (delay > 0) return setTimeout(() => { const update = apply(); if (!res.destroyed) send(200, { update }); }, delay);
+        return send(200, { update: apply() });
       }
       if (req.method === 'GET' && (m = /^\/orders\/(\d+)\/refunds\/(\d+)$/.exec(path))) {
         const r = state.refunds[`${m[1]}:${m[2]}`];

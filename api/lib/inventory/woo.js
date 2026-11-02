@@ -43,12 +43,12 @@ function url(path, params = {}) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export async function wooRequest(method, path, { params, body, retries = 3 } = {}) {
+export async function wooRequest(method, path, { params, body, retries = 3, timeoutMs = TIMEOUT_MS } = {}) {
   if (!wooConfigured()) throw new WooError(0, 'WooCommerce is not configured (WOOCOMMERCE_* env)');
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       const res = await fetch(url(path, params), {
         method,
@@ -64,7 +64,10 @@ export async function wooRequest(method, path, { params, body, retries = 3 } = {
       if (res.status !== 429 && res.status < 500) throw lastErr;
     } catch (err) {
       if (err instanceof WooError && err.status && err.status !== 429 && err.status < 500) throw err;
-      lastErr = err instanceof WooError ? err : new WooError(0, `Woo ${method} ${path} failed: ${err.message}`);
+      lastErr = err instanceof WooError ? err
+        : err?.name === 'AbortError'
+          ? Object.assign(new WooError(0, `Woo ${method} ${path} timed out after ${timeoutMs} ms`), { timeout: true })
+          : new WooError(0, `Woo ${method} ${path} failed: ${err.message}`);
     } finally {
       clearTimeout(t);
     }

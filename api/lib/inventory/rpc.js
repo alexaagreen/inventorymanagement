@@ -24,6 +24,8 @@ const ARG_TYPES = {
   apply_woo_refund: ['bigint', 'jsonb'],
   list_stock_push_due: ['int'],
   mark_stock_pushed: ['uuid', 'numeric', 'boolean', 'text'],
+  release_stock_push: ['uuid[]'],
+  defer_stock_push: ['uuid[]', 'int', 'text'],
   enqueue_stock_push: ['text[]'],
   log_woo_webhook: ['text', 'text', 'text', 'text'],
   log_order_reconcile: ['uuid', 'jsonb'],
