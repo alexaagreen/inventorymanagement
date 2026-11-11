@@ -15,6 +15,9 @@ import monthCloseRoute from '../pages/api/inventory/month-close/index';
 import periodRoute from '../pages/api/inventory/month-close/[period]';
 import supplierItemsRoute from '../pages/api/inventory/suppliers/[id]/items';
 import supplierMovementsRoute from '../pages/api/inventory/suppliers/[id]/movements';
+import saleCostsRoute from '../pages/api/inventory/reports/sale-costs';
+import saleSourcesRoute from '../pages/api/inventory/reports/sale-sources';
+import landedCostsRoute from '../pages/api/inventory/landed-costs/index';
 
 /** Reads the files of a zip (xlsx) — enough to check what we wrote. */
 function unzip(buf) {
@@ -49,6 +52,8 @@ describe('downloads: one standard for csv | xlsx | pdf (v0.11.0)', () => {
     await rpc('set_purchase_order_status', [po.id, 'sent', 'test']);
     await rpc('receive_purchase_order', [po.id, { by: 'test', received_at: '2018-05-10T10:00:00+02:00', lines: [{ sku: 'EXP-1', qty: 4 }, { sku: 'EXP-2', qty: 2 }] }]);
     await rpc('close_month', { period: '2018-05', by: 'test' });
+    await rpc('record_sale', { ref_id: 'EXP-S1', lines: [{ sku: 'EXP-1', qty: 1 }] });
+    await rpc('create_landed_cost', { amount: 30, description: 'Frakt', po: po.number });
   });
 
   it('format: csv | xlsx | pdf (excel = xlsx), anything else is a 400', async () => {
@@ -107,6 +112,8 @@ describe('downloads: one standard for csv | xlsx | pdf (v0.11.0)', () => {
       [itemMovementsRoute, { sku: 'EXP-1', from: '2018-01-01' }], [cogsRoute, { group_by: 'day' }],
       [asOfRoute, { at: '2018-05-31' }], [periodRoute, { period: '2018-05', by: 'location' }],
       [supplierItemsRoute, { id: 'Export Test AS' }], [supplierMovementsRoute, { id: 'Export Test AS' }],
+      [saleCostsRoute, {}], [saleSourcesRoute, {}], [saleSourcesRoute, { group_by: 'supplier' }], [saleSourcesRoute, { group_by: 'receipt' }],
+      [saleSourcesRoute, { group_by: 'po' }], [saleSourcesRoute, { group_by: 'origin' }], [saleSourcesRoute, { group_by: 'sku' }], [landedCostsRoute, {}],
     ];
     expect(await db(`select id from inv.supplier where name = 'Export Test AS'`)).toHaveLength(1);
     for (const [route, q] of cases) {

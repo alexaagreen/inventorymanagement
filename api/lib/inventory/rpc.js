@@ -1,4 +1,4 @@
-// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.12.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Call an inv.* function and get jsonb back. Errors from inv._raise() become InventoryError.
 //   await rpc('create_adjustment', body)
@@ -17,6 +17,7 @@ const ARG_TYPES = {
   reverse_adjustment: ['uuid', 'text', 'text'],
   reverse_goods_receipt: ['uuid', 'text', 'text'],
   reverse_transfer: ['uuid', 'text', 'text'],
+  reverse_landed_cost: ['uuid', 'text', 'text'],
   get_item_status: ['text'],
   list_item_suppliers: ['text'],
   apply_woo_order: ['jsonb', 'text'],

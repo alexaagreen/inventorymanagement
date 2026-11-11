@@ -1,4 +1,4 @@
-// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.12.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Minimal XLSX writer (no dependencies): one sheet with a title block, a header row with
 // autofilter and frozen panes, typed cells (real numbers and dates with number formats) and a

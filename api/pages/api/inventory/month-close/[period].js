@@ -1,4 +1,4 @@
-// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.12.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, qBool } from '../../../../lib/inventory/handler';
 import { getMonthClose } from '../../../../lib/inventory/queries';
 import { exportFormat, sendExport, cols, periodLabel } from '../../../../lib/inventory/export';

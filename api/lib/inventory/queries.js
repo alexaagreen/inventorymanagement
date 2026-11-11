@@ -1,4 +1,4 @@
-// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.12.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Read queries for the list endpoints. No business logic — only filters,
 // sorting and keyset pagination over the views in schema `inv`.
@@ -148,7 +148,13 @@ export async function getMovement(id) {
             (select coalesce(jsonb_agg(to_jsonb(cc) order by cc.id), '[]') from inv.cogs_correction cc where cc.movement_id = $1::bigint) as corrections`,
     [id]);
   if (!rows[0]?.m) return null;
-  return { ...rows[0].m, cogs_corrections: rows[0].corrections };
+  // Where the cost of an outbound movement came from (receipt, PO, supplier) — spec §6.9
+  const sources = await sql(
+    `select consumption_id, qty, unit_cost, cost, estimated, origin, layer_id, root_layer_id, received_at,
+            receipt_id, receipt_number, po_id, po_number, supplier_id, supplier_name,
+            po_currency, po_unit_cost, fx_rate, landed_cost_per_unit, days_in_stock
+       from inv.v_consumption_source where movement_id = $1::bigint order by consumption_id`, [id]);
+  return { ...rows[0].m, cogs_corrections: rows[0].corrections, cost_sources: sources };
 }
 
 export async function cogsReport({ from, to, group_by, location }) {
@@ -289,7 +295,8 @@ export async function listTransfers({ from, to, location, limit, cursor }) {
 }
 
 export async function getDoc(kind, id) {
-  const fn = { adjustment: '_adjustment_json', transfer: '_transfer_json', receipt: '_receipt_json', po: '_po_json' }[kind];
+  const fn = { adjustment: '_adjustment_json', transfer: '_transfer_json', receipt: '_receipt_json', po: '_po_json',
+    landed_cost: '_landed_cost_json' }[kind];
   const rows = await sql(`select inv.${fn}($1::uuid) as d`, [id]);
   return rows[0]?.d || null;
 }
@@ -596,4 +603,115 @@ export async function stockAsOf({ at, by = 'sku', location, q }) {
     params: [cutoff], by, location, q,
   });
   return { at: String(at), cutoff_at: cutoff, by, location: location || null, q: q || null, ...out };
+}
+
+// ── Landed cost (spec §6.10) ───────────────────────────────────────────────
+export async function listLandedCosts({ status, receipt_id, po_id, from, to, q, limit, cursor }) {
+  const w = new Where();
+  if (status) w.add('lc.status = ?', status);
+  if (receipt_id) w.add('exists (select 1 from inv.landed_cost_line x where x.landed_cost_id = lc.id and x.receipt_id = ?::uuid)', receipt_id);
+  if (po_id) w.add(`exists (select 1 from inv.landed_cost_line x join inv.goods_receipt gr on gr.id = x.receipt_id
+                             where x.landed_cost_id = lc.id and gr.po_id = ?::uuid)`, po_id);
+  if (from) w.add('lc.occurred_at >= ?', from);
+  if (to) w.add('lc.occurred_at < ?', to);
+  if (q) w.add('(lc.number ilike ? or lc.description ilike ? or lc.vendor ilike ? or lc.invoice_ref ilike ?)', `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+  const c = decodeCursor(cursor);
+  if (c) w.add('(lc.created_at, lc.id) < (?::timestamptz, ?::uuid)', c.t, c.id);
+  const rows = await sql(
+    `select lc.id, lc.number, lc.status, lc.description, lc.vendor, lc.invoice_ref, lc.currency, lc.fx_rate,
+            lc.amount, lc.amount_base, lc.method, lc.applied_base, lc.to_stock, lc.to_cogs, lc.to_other,
+            lc.occurred_at, lc.note, lc.created_by, lc.created_at, lc.reversed_at, lc.reversed_by,
+            (select count(*)::int from inv.landed_cost_line x where x.landed_cost_id = lc.id) as line_count,
+            (select string_agg(distinct gr.number, ', ') from inv.landed_cost_line x
+               join inv.goods_receipt gr on gr.id = x.receipt_id where x.landed_cost_id = lc.id) as receipts,
+            (select string_agg(distinct po.number, ', ') from inv.landed_cost_line x
+               join inv.goods_receipt gr on gr.id = x.receipt_id join inv.purchase_order po on po.id = gr.po_id
+              where x.landed_cost_id = lc.id) as po_numbers
+       from inv.landed_cost lc
+       ${w.sql} order by lc.created_at desc, lc.id desc limit ${limit + 1}`, w.params);
+  return page(rows, limit, (r) => ({ t: r.created_at, id: r.id }));
+}
+
+// ── Margin per sale: cost per order line and where it came from (spec §6.9) ──
+// The ledger gives the cost; the shop joins its own revenue lines on (source, order_id, line_id).
+const SALE_COST_COLS = `source, order_id, line_id, order_ref, sku, item_name, location, sold_at,
+  qty_sold, qty_returned, qty_net, cogs, unit_cogs, cost_estimated, last_cost_change_at`;
+
+export async function saleCosts({ from, to, source, order_id, order_ids, skus, location, estimated, changed_since, limit, cursor, all }) {
+  const w = new Where();
+  if (from) w.add('sold_at >= ?', from);
+  if (to) w.add('sold_at < ?', to);
+  if (source) w.add('source = ?', source);
+  if (order_id) w.add('order_id = ?', String(order_id).replace(/^#/, ''));
+  if (order_ids) w.add('order_id = any(?)', order_ids.map((x) => String(x).replace(/^#/, '')));
+  if (skus) w.add('upper(sku) = any(?)', skus.map((x) => x.toUpperCase()));
+  if (location) w.add('location ilike ?', `%${String(location).toUpperCase()}%`);
+  if (estimated != null) w.add('cost_estimated = ?', estimated);
+  // Order lines whose cost changed after the fact (covered estimate, landed cost) — for re-syncing margin
+  if (changed_since) w.add('last_cost_change_at >= ?', changed_since);
+  const tw = new Where();
+  tw.parts = [...w.parts]; tw.params = [...w.params];
+  const c = decodeCursor(cursor);
+  if (c) w.add(`(sold_at, source, order_id, coalesce(line_id, ''), sku) < (?::timestamptz, ?, ?, ?, ?)`, c.t, c.s, c.o, c.l, c.k);
+  const rows = await sql(
+    `select ${SALE_COST_COLS} from inv.v_sale_line_cost ${w.sql}
+      order by sold_at desc, source desc, order_id desc, coalesce(line_id, '') desc, sku desc ${all ? '' : `limit ${limit + 1}`}`, w.params);
+  const [t] = await sql(
+    `select count(*)::int as lines, coalesce(sum(qty_net), 0) as qty_net, coalesce(sum(cogs), 0) as cogs,
+            count(*) filter (where cost_estimated)::int as estimated_lines
+       from inv.v_sale_line_cost ${tw.sql}`, tw.params);
+  const out = all ? { data: rows, next_cursor: null }
+    : page(rows, limit, (r) => ({ t: r.sold_at, s: r.source, o: r.order_id, l: r.line_id || '', k: r.sku }));
+  return { from: from || null, to: to || null, totals: t, ...out };
+}
+
+const SALE_SOURCE_GROUPS = {
+  supplier: { key: `coalesce(supplier_name, '—')`, extra: 'supplier_id' },
+  po: { key: `coalesce(po_number, '—')`, extra: `supplier_name, po_currency` },
+  receipt: { key: `coalesce(receipt_number, '—')`, extra: `po_number, supplier_name, received_at::date as received_on` },
+  origin: { key: 'origin', extra: null },
+  sku: { key: 'sku', extra: 'item_name' },
+};
+
+export async function saleSources({ from, to, group_by, source, order_id, skus, supplier_id, po_id, receipt_id, origin, location, limit, cursor, all }) {
+  const w = new Where();
+  if (from) w.add('sold_at >= ?', from);
+  if (to) w.add('sold_at < ?', to);
+  if (source) w.add('source = ?', source);
+  if (order_id) w.add('order_id = ?', String(order_id).replace(/^#/, ''));
+  if (skus) w.add('upper(sku) = any(?)', skus.map((x) => x.toUpperCase()));
+  if (supplier_id) w.add('supplier_id = ?::uuid', supplier_id);
+  if (po_id) w.add('po_id = ?::uuid', po_id);
+  if (receipt_id) w.add('receipt_id = ?::uuid', receipt_id);
+  if (origin) w.add('origin = ?', origin);
+  if (location) w.add('location = ?', String(location).toUpperCase());
+  const base = { from: from || null, to: to || null, group_by: group_by || null };
+  if (group_by) {
+    const g = SALE_SOURCE_GROUPS[group_by];
+    if (!g) throw new InventoryError('VALIDATION', `group_by must be one of ${Object.keys(SALE_SOURCE_GROUPS).join(', ')}`, { field: 'group_by' });
+    const extraNames = g.extra ? g.extra.split(',').map((x) => x.trim().split(' as ').pop()) : [];
+    const rows = await sql(
+      `select key${extraNames.map((n) => `, min(${n}::text) as ${n}`).join('')},
+              sum(qty) as qty, round(sum(cost), 2) as cost,
+              round(sum(cost) / nullif(sum(qty), 0), 4) as unit_cost,
+              round(sum(days_in_stock * qty) / nullif(sum(qty) filter (where days_in_stock is not null), 0), 1) as avg_days_in_stock,
+              count(distinct (source, order_id))::int as orders,
+              bool_or(estimated) as has_estimates
+         from (select ${g.key} as key${g.extra ? `, ${g.extra}` : ''}, qty, cost, days_in_stock, source, order_id, estimated
+                 from inv.v_sale_cost_source ${w.sql}) x
+        group by key order by sum(cost) desc, key`, w.params);
+    return { ...base, total_cost: Math.round(rows.reduce((s, r) => s + Number(r.cost || 0), 0) * 100) / 100, rows };
+  }
+  const c = decodeCursor(cursor);
+  if (c) w.add('(movement_id, layer_id_sort) < (?::bigint, ?::bigint)', c.m, c.l);
+  const rows = await sql(
+    `select * from (
+       select movement_id, coalesce(layer_id, 0) as layer_id_sort, source, order_id, line_id, order_ref, sku, item_name, location, sold_at,
+              qty, unit_cost, cost, estimated, origin, layer_id, root_layer_id, received_at,
+              receipt_id, receipt_number, po_id, po_number, supplier_id, supplier_name,
+              po_currency, po_unit_cost, fx_rate, landed_cost_per_unit, days_in_stock
+         from inv.v_sale_cost_source) x
+     ${w.sql} order by movement_id desc, layer_id_sort desc ${all ? '' : `limit ${limit + 1}`}`, w.params);
+  const out = all ? { data: rows, next_cursor: null } : page(rows, limit, (r) => ({ m: r.movement_id, l: r.layer_id_sort }));
+  return { ...base, ...out };
 }

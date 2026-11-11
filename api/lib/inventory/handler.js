@@ -1,4 +1,4 @@
-// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.12.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // route({ GET, POST, … }) — shared wrapper for all /api/inventory/* routes:
 //   * method dispatch (405 with Allow header)
@@ -134,4 +134,14 @@ export function requireLines(body) {
   for (const [i, l] of body.lines.entries()) {
     if (!l || typeof l !== 'object') throw new InventoryError('VALIDATION', `line ${i + 1} must be an object`);
   }
+}
+
+/** Landed cost input (spec §6.10): a target (receipts, po or lines) and an amount unless the lines carry it. */
+export function requireLandedCostTarget(body) {
+  const hasReceipts = Array.isArray(body?.receipts) && body.receipts.length > 0;
+  const hasLines = Array.isArray(body?.lines) && body.lines.length > 0;
+  if (!hasReceipts && !hasLines && !body?.po && !body?.po_id && !body?.po_number) {
+    throw new InventoryError('VALIDATION', 'give receipts, po or lines', { field: 'receipts' });
+  }
+  if (!hasLines) requireParam(body.amount, 'amount');
 }

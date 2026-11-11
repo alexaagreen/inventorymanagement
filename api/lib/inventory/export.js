@@ -1,4 +1,4 @@
-// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.12.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // THE standard for downloads (spec §6.0.1). Every list/report endpoint that can be downloaded
 // uses this file — never its own CSV/Excel/PDF code:
@@ -106,6 +106,53 @@ const STD = {
   pack_qty: { type: 'qty', nb: 'Pakning', en: 'Pack qty' },
   last_purchase_at: { type: 'date', nb: 'Sist kjøpt', en: 'Last purchased' },
   preferred: { type: 'bool', nb: 'Foretrukket', en: 'Preferred' },
+  // Margin per sale and cost tracing (v0.12.0, spec §6.9)
+  source: { type: 'code', nb: 'Kilde', en: 'Source' },
+  order_id: { type: 'code', nb: 'Ordre-id', en: 'Order id' },
+  line_id: { type: 'code', nb: 'Linje-id', en: 'Line id' },
+  order_ref: { type: 'text', nb: 'Ordre', en: 'Order' },
+  sold_at: { type: 'datetime', nb: 'Solgt', en: 'Sold' },
+  qty_net: { type: 'qty', nb: 'Netto solgt', en: 'Net sold', total: true },
+  unit_cogs: { type: 'cost', nb: 'Varekost per enhet', en: 'Unit COGS' },
+  last_cost_change_at: { type: 'datetime', nb: 'Kost sist endret', en: 'Cost last changed' },
+  cost: { type: 'nok', nb: 'Kost (NOK)', en: 'Cost (NOK)', total: true },
+  estimated: { type: 'bool', nb: 'Estimert', en: 'Estimated' },
+  origin: {
+    type: 'code', nb: 'Opphav', en: 'Origin',
+    values: {
+      purchase: { nb: 'Innkjøp', en: 'Purchase' }, opening_balance: { nb: 'Åpningsbalanse', en: 'Opening balance' },
+      adjustment: { nb: 'Justering', en: 'Adjustment' }, sale_return: { nb: 'Retur', en: 'Sale return' },
+      estimated: { nb: 'Estimert (udekket)', en: 'Estimated (uncovered)' }, other: { nb: 'Annet', en: 'Other' },
+    },
+  },
+  received_at: { type: 'date', nb: 'Mottatt', en: 'Received' },
+  receipt_number: { type: 'code', nb: 'Varemottak', en: 'Receipt' },
+  po_number: { type: 'code', nb: 'Innkjøpsordre', en: 'Purchase order' },
+  supplier_name: { type: 'text', nb: 'Leverandør', en: 'Supplier' },
+  po_currency: { type: 'code', nb: 'Valuta', en: 'Currency' },
+  po_unit_cost: { type: 'cost', nb: 'Innkjøpspris (valuta)', en: 'Purchase price (currency)' },
+  fx_rate: { type: 'cost', nb: 'Kurs', en: 'FX rate' },
+  landed_cost_per_unit: { type: 'cost', nb: 'Frakt/toll per enhet', en: 'Landed cost per unit' },
+  days_in_stock: { type: 'qty', nb: 'Dager på lager', en: 'Days in stock' },
+  avg_days_in_stock: { type: 'qty', nb: 'Snitt dager på lager', en: 'Avg. days in stock' },
+  orders: { type: 'int', nb: 'Ordre', en: 'Orders', total: true },
+  // Landed cost (v0.12.0, spec §6.10)
+  number: { type: 'code', nb: 'Nummer', en: 'Number' },
+  status: { type: 'code', nb: 'Status', en: 'Status' },
+  description: { type: 'text', nb: 'Beskrivelse', en: 'Description', grow: true },
+  vendor: { type: 'text', nb: 'Fakturert av', en: 'Invoiced by' },
+  invoice_ref: { type: 'code', nb: 'Fakturanr.', en: 'Invoice no.' },
+  currency: { type: 'code', nb: 'Valuta', en: 'Currency' },
+  amount: { type: 'nok', nb: 'Beløp (valuta)', en: 'Amount (currency)' },
+  amount_base: { type: 'nok', nb: 'Beløp (NOK)', en: 'Amount (NOK)', total: true },
+  method: {
+    type: 'code', nb: 'Fordeling', en: 'Split',
+    values: { value: { nb: 'Etter verdi', en: 'By value' }, qty: { nb: 'Etter antall', en: 'By qty' }, manual: { nb: 'Manuell', en: 'Manual' } },
+  },
+  to_stock: { type: 'nok', nb: 'Til lagerverdi (NOK)', en: 'To stock value (NOK)', total: true },
+  to_cogs: { type: 'nok', nb: 'Til varekost (NOK)', en: 'To COGS (NOK)', total: true },
+  to_other: { type: 'nok', nb: 'Til svinn/justering (NOK)', en: 'To write-off/adjustment (NOK)', total: true },
+  receipts: { type: 'text', nb: 'Varemottak', en: 'Receipts' },
 };
 
 /** Column list from standard keys ('sku') and/or overrides ({ key, nb, en, type, total }). */

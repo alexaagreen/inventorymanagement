@@ -1,4 +1,4 @@
-// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.12.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Minimal PDF writer (no dependencies) for report tables: A4, portrait or landscape picked from
 // the column widths, title block on page 1, the header row repeated on every page, zebra rows,

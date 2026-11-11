@@ -150,6 +150,8 @@ Dette gir eksakt COGS per salgslinje og er grunnlaget for COGS-rapport.
 ### 2.7 `inv.cogs_correction`
 Når et estimert konsum dekkes av et faktisk lag, logges differansen her (tilsvarer Cin7 «Sale COGS Change»): `movement_id` (salget), `covered_by_movement_id` (mottaket), `qty`, `estimated_unit_cost`, `actual_unit_cost`, `delta_cost`, `created_at`.
 
+Fra v0.12.0 logges også kostendring fra landed cost fordelt etter salget (§6.10): `reason` (`cover` — standard, som over | `landed_cost` | `landed_cost_reversal`) og `landed_cost_id`. `covered_by_movement_id` er da mottaksbevegelsen kosten kom fra, `estimated_unit_cost`/`actual_unit_cost` er kost før/etter.
+
 ### 2.8 `inv.stock_balance` — cache + låserad
 
 `(item_id, location_id) pk`, `on_hand numeric default 0`, `value numeric default 0` (= Σ `qty_remaining × unit_cost` over lag), `updated_at`. Oppdateres i samme transaksjon som bevegelsen. Raden låses `FOR UPDATE` i alle skrivefunksjoner — dette serialiserer skriving per (vare × lokasjon) og gjør `new_qty`-justeringer trygge under samtidighet. Kan alltid gjenoppbygges fra `inv.movement`/`inv.cost_layer` (`inv.rebuild_balances()`).
@@ -249,6 +251,8 @@ Unique `(po_id, item_id)`. Linjer kan endres fritt i `draft`; i `sent` kan `qty_
 
 `inv.v_open_consumption` — udekkede konsum (negativ beholdning) per item/location, for varsling.
 
+`inv.v_sale_line_cost`, `inv.v_sale_cost_source`, `inv.v_sale_movement`, `inv.v_consumption_source` (v0.12.0) — kost per solgt ordrelinje og sporing tilbake til innkjøpet, se §6.9.
+
 ---
 
 ## 3. Kostlogikk
@@ -285,7 +289,7 @@ For hver linje: `delta` oppgis direkte, eller `new_qty` → `delta = new_qty −
 ### 3.4 Varemottak — kost
 `unit_cost_base = round(unit_cost × fx_rate + landed_cost_per_unit, 4)` der `unit_cost` er mottakslinjens pris i PO-valuta (default = PO-linjens pris, kan overstyres), `fx_rate` = mottakets kurs (default PO-ens), `landed_cost_per_unit` default 0. Laget får `received_at = goods_receipt.received_at` (mottaksdato, ikke tidspunktet noen trykket på knappen — kan settes tilbake i tid).
 
-Landed cost som fordeles **etter** mottak (fraktfaktura kommer uker senere) er ikke i v1. Noteres som v1.1: «landed cost allocation» som oppdaterer `unit_cost` på gjenværende lag + `cogs_correction` for det som allerede er solgt.
+Landed cost som fordeles **etter** mottak (fraktfaktura kommer uker senere) bokføres som eget dokument fra v0.12.0 — se §6.10: `unit_cost` oppdateres på gjenværende lag, og det som allerede er solgt får `cogs_correction`.
 
 ### 3.5 Negativ beholdning og estimert kost
 Når et salg tar beholdningen under 0 (eller den allerede er under 0):
@@ -431,7 +435,7 @@ Tynt lag: valider input (zod), kall RPC via `pg`, returnér JSON. Ingen forretni
 | `UNAUTHORIZED` | 401 |
 | `ITEM_NOT_FOUND`, `LOCATION_NOT_FOUND`, `PO_NOT_FOUND`, `NOT_FOUND` | 404 |
 | `DUPLICATE_REF` (kun når `on_conflict=error`) | 409 |
-| `LAYER_CONSUMED`, `PO_LOCKED` | 409 |
+| `LAYER_CONSUMED`, `PO_LOCKED`, `ALREADY_REVERSED`, `LANDED_COST_POSTED` (v0.12.0) | 409 |
 | `INSUFFICIENT_STOCK`, `COST_REQUIRED`, `OVER_RECEIPT`, `PO_STATUS_INVALID` | 422 |
 | annet | 500 |
 
@@ -654,6 +658,191 @@ POST /sync/month-close                    → cron: close_due_months (source=sch
 UI (per butikk): `/inventory/month-close` (liste over måneder, «Close missing months», lager per dato) og
 `/inventory/month-close/:period` (per SKU, ← → gjennom månedene, sammenligning med forrige måned, CSV, rekalkulering).
 
+### 6.9 Margin per salg — sporing salg ↔ innkjøp (v0.12.0, migrasjon 0099)
+
+**Mål.** For hver solgte ordrelinje skal vi kunne svare på: hva kostet akkurat disse enhetene, hvilket innkjøp
+(mottak, PO, leverandør, kurs) kom de fra, og hva ble marginen — og følge det over tid per SKU, leverandør og kampanje.
+
+**Ansvarsdeling.** Ledgeren eier *kost og sporing*. Butikken eier *inntekt* (ordrelinjens salgspris, rabatt, MVA) — den
+finnes ikke i `inv` og skal ikke inn dit. Margin = butikkens inntektslinje joinet mot ledgerens kostlinje. Slik holder
+modulen seg lik i alle butikker selv om inntektstabellene er forskjellige.
+
+**Kjeden**
+
+```
+Woo-ordrelinje ─► movement (sale)            ref_type='woo_order', ref_id=order.id, ref_line=line.id[:n]   (§7.2)
+               ─► layer_consumption          én rad per konsumert FIFO-lag: qty, unit_cost, estimated      (§2.6)
+               ─► cost_layer                 laget; ved overføring peker source_layer_id på opphavslaget   (§3.6)
+               ─► movement (purchase_receipt) laget sin opprettende bevegelse
+               ─► goods_receipt_line         unit_cost (PO-valuta), landed_cost_per_unit, unit_cost_base   (§3.4)
+               ─► goods_receipt ─► purchase_order ─► supplier                              fx_rate, PO-nummer
+```
+
+Regler:
+- **Ordrelinje-id** = `split_part(ref_line, ':', 1)`. Suffiks `:n` er økt antall / gjenåpnet ordre, `:rN` er redusert linje
+  eller kansellert ordre (`sale_return`). Alle hører til samme Woo-linje.
+- **Refusjoner** har `ref_type='woo_refund'`, `ref_id=refund.id`; opprinnelig ordre og linje ligger i
+  `metadata.woo_order_id` / `metadata.woo_line_id`.
+- **Salg utenom Woo** (`POST /sales`) har `ref_type='manual_sale'` (eller det kalleren satte) og `ref_line` som linje-id.
+  `record_sale_return` lagrer fra v0.12.0 hvilket salg som returneres (`metadata.original_ref_type/_id/_line`; uten
+  `original_ref_line` brukes varens linje på salget), så returen havner på riktig ordrelinje. Eldre manuelle returer uten
+  dette vises som egne rader med `source='manual_return'`.
+- `movement.total_cost` på salget er **alltid gjeldende kost**: estimert kost som dekkes (§3.5) og landed cost fordelt i
+  ettertid (§6.10) skrives tilbake til bevegelsen. `cogs_correction` er loggen over endringen og skal *ikke* legges på en gang til.
+- Reverserte bevegelser (`reversed_by is not null`) og reverseringene selv er ikke med.
+
+**Views**
+
+`inv.v_sale_line_cost` — én rad per (kilde × ordre × ordrelinje × vare):
+
+| kolonne | innhold |
+|---|---|
+| `source` | `woo_order` / `manual_sale` / … (refusjoner ligger under `woo_order`) |
+| `order_id`, `line_id`, `order_ref` | Woo order id, Woo line_item id, salgets `reference` (`#1234`) |
+| `item_id`, `sku`, `item_name`, `location` | `location` = kodene salget gikk fra, kommaseparert (normalt én) |
+| `sold_at` | `occurred_at` på første salg på linjen |
+| `qty_sold`, `qty_returned`, `qty_net` | salg, returer (ordreendring + refusjon), netto |
+| `cogs` | Σ `total_cost` salg − Σ `total_cost` retur, basisvaluta |
+| `unit_cogs` | `cogs / qty_net` (null når `qty_net ≤ 0`) |
+| `cost_estimated` | `true` så lenge noe av linjen er udekket (§3.5) — marginen er foreløpig |
+| `last_cost_change_at` | siste `cogs_correction` på linjen — kosten ble endret etter salget (dekket estimat, landed cost) |
+
+`inv.v_sale_cost_source` — én rad per (salgsbevegelse × konsumert lag), sporet tilbake til opphavet:
+
+| kolonne | innhold |
+|---|---|
+| `movement_id`, `source`, `order_id`, `line_id`, `order_ref`, `sku`, `location`, `sold_at` | salget |
+| `qty`, `unit_cost`, `cost`, `estimated` | konsumert fra dette laget |
+| `origin` | `purchase` / `opening_balance` / `adjustment` / `sale_return` / `estimated` (udekket) / `other` |
+| `layer_id`, `root_layer_id`, `received_at` | `root_layer_id` følger `source_layer_id` gjennom overføringer og reverseringer (`inv._root_layer`) |
+| `receipt_id`, `receipt_number`, `receipt_line_id`, `po_id`, `po_number`, `supplier_id`, `supplier_name` | satt når `origin='purchase'` |
+| `po_currency`, `po_unit_cost`, `fx_rate`, `landed_cost_per_unit` | hvorfor kosten ble som den ble |
+| `days_in_stock` | `sold_at − received_at` i dager (negativ når salget kom før mottaket som dekket det) |
+
+Hjelpeviews: `inv.v_sale_movement` (salg/retur mappet til kilde, ordre og linje) og `inv.v_consumption_source` (samme
+sporing for *alle* utgående bevegelser — også svinn, justering og flytting; det `GET /movements/:id` viser).
+
+Lag fra `sale_return` har ikke noe innkjøp bak seg (de arver bare salgets kost, §3.8) og rapporteres med egen `origin`.
+
+**Endepunkter** (følger nedlastingsstandarden i §6.0.1)
+
+```
+GET /reports/sale-costs?from=&to=&source=&order_id=&order_ids=1,2&sku=&skus=&location=&estimated=1&changed_since=
+                        &limit=&cursor=&format=csv|xlsx|pdf
+    → { from, to, totals:{ lines, qty_net, cogs, estimated_lines }, data:[ rad fra v_sale_line_cost ], next_cursor }
+       -- periode på sold_at; changed_since = linjer der kosten er endret etter dette tidspunktet (re-synk av margin)
+GET /reports/sale-sources?from=&to=&source=&order_id=&sku=&skus=&supplier_id=&po_id=&receipt_id=&origin=&location=
+                          &limit=&cursor=&format=…
+    → { data:[ rad fra v_sale_cost_source ], next_cursor }
+GET /reports/sale-sources?group_by=supplier|po|receipt|origin|sku&…samme filtre
+    → { group_by, total_cost, rows:[{ key, qty, cost, unit_cost, avg_days_in_stock, orders, has_estimates, … }] }
+GET /movements/:id   → + cost_sources[] (origin, receipt_number, po_number, supplier_name, fx_rate, …)
+```
+
+**Butikkens del — margin-view** (bor i butikk-repoet, ikke i modulen). Eksempel for en butikk med
+`fin_rep_woocommerce_order_lines` (Bark):
+
+```sql
+create or replace view public.v_order_line_margin as
+select l.wc_order_id, l.line_item_id, l.sku, l.name, o.date_created,
+       l.total                              as revenue_ex_vat,      -- Woo line total er eks. MVA, etter rabatt
+       c.qty_net, c.cogs, c.cost_estimated, c.last_cost_change_at,
+       l.total - c.cogs                     as margin,
+       case when l.total > 0 then round((l.total - c.cogs) / l.total * 100, 1) end as margin_pct
+  from fin_rep_woocommerce_order_lines l
+  join fin_rep_woocommerce_orders o on o.wc_order_id = l.wc_order_id
+  left join inv.v_sale_line_cost c
+         on c.source = 'woo_order' and c.order_id = l.wc_order_id::text and c.line_id = l.line_item_id::text;
+```
+Regler butikken må følge:
+- **Inntekt og kost må være netto på samme måte.** `cogs` er netto etter returer; da må også refundert beløp trekkes fra
+  inntekten (butikkens refusjonsdata), ellers blir marginen for høy på returnerte ordre.
+- **Manglende kost er ukjent, ikke 100 % margin.** `c.cogs is null` (vare uten `track_stock`, umatchet SKU, ordre fra før
+  ledgeren startet) vises som «ukjent» og holdes utenfor margin-%.
+- **Kost kan endre seg etter salget.** En butikk som kopierer kost inn i egne tabeller må re-synke linjer med
+  `last_cost_change_at` nyere enn forrige synk (`GET /reports/sale-costs?changed_since=`). Et view som over trenger det ikke.
+- Dette er **dekningsbidrag 1** (varekost). Frakt ut, betalingsgebyr og annonsekost er butikkens egne lag oppå.
+
+**Hva som begrenser kvaliteten på tallene**
+- **Landed cost.** Frakt/toll må inn — enten som `landed_cost_per_unit` ved mottak eller fordelt i ettertid (§6.10).
+  Uten det er marginen på importvarer for høy.
+- **Åpningsbalanse.** Lag med `origin='opening_balance'` har kosten som ble satt ved oppstart; ingen sporing til innkjøp.
+- **Estimert kost.** Salg på negativ beholdning er foreløpige til mottaket kommer (`cost_estimated`).
+- **Bundles.** Følges aldri i ledgeren (0091). Hvis Woo legger inntekten på bundle-linjen og lagertrekket på
+  komponentlinjene, havner inntekt og kost på forskjellige linjer — butikken må summere per ordre eller fordele inntekten.
+- **Valuta.** Kost er låst til mottakets kurs (§3.4). Kurseffekt leses ut av `fx_rate` i `v_sale_cost_source`.
+
+**Åpne punkter**
+- Skal `sale_return`-lag arve opphavslaget, slik at en returnert og videresolgt vare fortsatt sporer til sitt innkjøp
+  (og får med seg landed cost fordelt etter returen)?
+- Trengs en materialisert variant (tabell oppdatert av trigger) for butikker med store volum? Viewene bruker indeksene
+  `idx_consumption_movement`, `idx_layer_movement`, `idx_grl_movement` og `idx_layer_source`.
+
+### 6.10 Landed cost — frakt, toll og gebyr fordelt i ettertid (v0.12.0, migrasjon 0099)
+
+Fraktfakturaen og tolldeklarasjonen kommer ofte uker etter varemottaket. En **landed cost** fordeler et slikt beløp på
+ett eller flere varemottak, og kosten følger enhetene dit de er *nå*:
+
+| hvor er enhetene | hva skjer | beløpet havner i |
+|---|---|---|
+| på lager (også etter overføring til annen lokasjon) | FIFO-laget får høyere `unit_cost`, `stock_balance.value` oppdateres | `to_stock` |
+| solgt | salgets `unit_cost`/`total_cost` oppdateres; én rad i `cogs_correction` per konsumert lag (`reason='landed_cost'`, `landed_cost_id`) | `to_cogs` |
+| justert ut / avskrevet | bevegelsens kost oppdateres | `to_other` |
+
+Dermed er `antall mottatt × delta ≈ to_stock + to_cogs + to_other` per mottakslinje (testet). Enheter som en kunde har
+returnert beholder kosten de ble returnert til (§3.8) og får ikke med seg fordelingen.
+
+**Fordeling** (`method`):
+- `value` (standard) — etter varenes verdi: `qty × pris i PO-valuta × mottakets kurs` (uten tidligere landed cost).
+- `qty` — likt per enhet.
+- `manual` — beløp per mottakslinje oppgis (`lines`); brukes for toll som bare gjelder noen varer.
+
+Beløpet deles i hele øre (største linje tar resten). Delta per enhet har 4 desimaler, så `applied_base` kan avvike fra
+`amount_base` med noen øre; forskjellen står som `rounding_diff`. Beløp er eks. MVA. Annen valuta enn basisvalutaen krever
+`fx_rate` (kursen på fakturaen, ikke mottakets).
+
+**Datamodell**
+- `inv.landed_cost` — dokumentet: `number` (`LC-000001`), `status` (`posted|reversed`), `description`, `vendor`, `invoice_ref`,
+  `currency`, `fx_rate`, `amount`, `amount_base`, `method`, `applied_base`, `to_stock`, `to_cogs`, `to_other`, `occurred_at`
+  (fakturadato), `created_by/at`, `reversed_at/by`, `reverse_note`.
+- `inv.landed_cost_line` — én rad per mottakslinje: `receipt_id`, `receipt_line_id`, `movement_id`, `qty`, `basis`,
+  `amount_base`, `unit_delta`, `unit_cost_before/after`, og hvor enhetene var da den ble bokført: `qty_in_stock`, `qty_sold`,
+  `qty_other`, `to_stock`, `to_cogs`, `to_other`.
+- `inv.cogs_correction` har fått `reason` (`cover` | `landed_cost` | `landed_cost_reversal`) og `landed_cost_id`.
+
+**Hva som oppdateres per mottakslinje** (`inv._apply_landed_delta`, én transaksjon):
+1. Alle saldoer for varen låses (alle lokasjoner, fast rekkefølge) — ingen kan selge eller flytte fra lagene imens.
+2. Lagene finnes: laget mottaket skapte + alle lag avledet av det (`source_layer_id`: overføring, reversert salg).
+3. `cost_layer.unit_cost` og `layer_consumption.unit_cost` på disse økes med delta.
+4. Utgående bevegelser regnes om fra konsumradene sine; inngående (mottaket selv, `transfer_in`, `reversal`) fra lagene sine.
+5. `goods_receipt_line.landed_cost_per_unit` og `unit_cost_base` økes; mottaksbevegelsens `metadata.landed_cost_per_unit` likeså.
+6. `stock_balance.value` regnes om. Antall endres aldri — ingen bevegelser opprettes og ingenting pushes til Woo.
+
+**Reversering.** `reverse_landed_cost` tar den samme deltaen ut igjen langs den samme kjeden (lag som er opprettet ved
+overføring etter bokføringen er med, de har arvet kosten) og logger `cogs_correction` med `reason='landed_cost_reversal'`.
+Et varemottak med bokført landed cost kan ikke reverseres (`409 LANDED_COST_POSTED`) — reverser landed cost først.
+Landed cost kan ikke bokføres på et reversert mottak.
+
+**Månedsslutt.** Lagkosten endres med tilbakevirkende kraft: «lager per dato» (§6.8) bruker gjeldende lagkost, så en
+landed cost bokført i november øker også lagerverdien per 31.10 når den regnes på nytt. En *lukket* måned står urørt til
+den rekalkuleres med vilje. COGS-effekten for allerede solgte varer ligger i `cogs_correction.created_at` (bokføringstidspunktet)
+og vises som «korreksjoner bokført i perioden» i `GET /reports/cogs`.
+
+```
+GET  /landed-costs?status=&receipt_id=&po_id=&from=&to=&q=&limit=&cursor=&format=csv|xlsx|pdf
+POST /landed-costs          { amount, currency?, fx_rate?, method?: value|qty|manual, description?, vendor?, invoice_ref?,
+                              occurred_at?, note?,
+                              receipts?: [id | nummer, …],          -- ett eller flere varemottak
+                              po?: id | nummer,                     -- alle fullførte mottak på innkjøpsordren
+                              lines?: [{ receipt_line_id | receipt + sku, amount }] }   -- method manual; amount = Σ linjer
+     → landed cost med lines[] og receipts[]
+POST /landed-costs/preview  -- samme input, skriver ingenting: fordeling per linje + to_stock / to_cogs / to_other
+GET  /landed-costs/:id
+POST /landed-costs/:id/reverse  { note? }
+```
+UI (per butikk): «Legg til frakt/toll» på varemottaket og på innkjøpsordren → forhåndsvisning (hvor mye går til lagerverdi,
+hvor mye til varekost på allerede solgte varer) → bokfør. Liste under Innkjøp med reverser-knapp.
+
 ---
 
 ## 7. Woo-integrasjon i detalj
@@ -775,7 +964,7 @@ inventory-ledger/
 
 - Allokering/reservasjon ved ordre (Available = On Hand − Allocated). Kolonnen `allocated` og typen er forberedt; v2 legger til `allocation`-tabell og trekker ved `completed` i stedet.
 - Batch/serienummer, FEFO, utløpsdato.
-- Landed cost-fordeling etter mottak (fraktfaktura i ettertid) → v1.1.
+- ~~Landed cost-fordeling etter mottak (fraktfaktura i ettertid)~~ — levert i v0.12.0 (§6.10).
 - Stocktake med låsing av lokasjon (v1: telling = adjustment med `reason='telling'`; UI kan bygge tellelister over `/stock`).
 - ~~Historisk verdsetting («lagerverdi per 31.12»)~~ — levert i v0.11.0 som månedsslutt + lager per dato (§6.8).
 - Bundles/BOM, produksjon.
@@ -812,6 +1001,8 @@ Alle med én item `KNIV-1`, lokasjon `MAIN` med mindre annet er sagt. Kost i NOK
 | T20 | `verify_integrity()` etter T1–T19 | Ingen avvik: Σ qty per item/loc = on_hand; Σ qty_remaining = max(on_hand,0); udekket = max(−on_hand,0). |
 | T21 | `GET /movements?type=sale,sale_return&from=&to=&sku=` med 1 200 rader, limit 500 | 3 sider via cursor, stabil rekkefølge `id desc`, ingen duplikater. |
 | T22 | Item med `track_stock=false` | Bevegelser tillatt, aldri push, `skipped` i push-status. |
+| T33 | Margin per salg (§6.9): salg 3 stk over to lag (2 @ 100, 1 @ 120); linje økt 1 → 3 → 2 og refundert 1; salg på negativ beholdning dekket av senere mottak; mottak på MAIN → overføring → salg fra BUTIKK; reversert salg | `v_sale_line_cost.cogs = 320` og to kilderader med riktig mottak/PO/leverandør; én rad per ordrelinje med riktig netto; `cost_estimated` `true → false` og `origin` `estimated → purchase`; PO spores gjennom overføringen (`root_layer_id`); reversert salg gir ingen rad; Σ `cogs` = ledgerens COGS. |
+| T34 | Landed cost (§6.10): mottak A 10 @ 100 + B 5 @ 400, A solgt 3 (Woo), 4 flyttet til BUTIKK og 1 solgt der, 1 avskrevet; frakt 300 etter verdi | A +10/enhet, B +40/enhet; `to_stock` 250, `to_cogs` 40, `to_other` 10; lagerverdi oppdatert på begge lokasjoner; salgene 330 og 110; `cogs_correction` 40; mottaket kan ikke reverseres (`409 LANDED_COST_POSTED`); reversering av landed cost gir alt tilbake og korreksjonene netto 0. I tillegg: `qty` over to delmottak via PO, `manual` i EUR, avrunding 100/3, reversert salg teller som lager, dekket estimat får frakten. |
 
 ---
 
@@ -930,6 +1121,7 @@ UI-regler: alle skrivende knapper sender `Idempotency-Key` (dobbeltklikk/retry e
 - **skarpekniverv3 / Bark-storefront**: trenger ikke API-et — `available` kan leses direkte fra `inv.v_item_status` i samme Supabase (read-only view, `grant select` til `anon`/`service_role` etter behov), eller fortsette å lese Woo `stock_quantity` som pushes. Anbefalt: fortsett med Woo-feltet (ingen endring i v3), men eksponér viewet for «lagerstatus i sanntid»-features senere.
 - **Agenter/Jarvis/Retool**: `Authorization: Bearer $INVENTORY_API_KEY` mot samme ruter. `GET /stock`, `GET /movements` og `GET /reports/cogs` er laget for det.
 - **Regnskap (senere)**: `GET /reports/cogs` + `GET /valuation` er de to tallene et bilag trenger.
+- **Margin/salgsrapporter (§6.9)**: butikkens inntektslinjer joines mot `inv.v_sale_line_cost`; sporing til innkjøp via `inv.v_sale_cost_source`.
 
 ### 11.8 Definition of done per butikk
 

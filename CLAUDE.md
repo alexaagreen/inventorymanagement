@@ -58,6 +58,7 @@ og snakker bare HTTP mot `/api/inventory/*`.
 | `migrations/0097_inv_supplier_rules_packs.sql` | v0.10.0: leverandørregler (`supplier.rules` — huskeliste vist på PO/mottak, lest av agenter), `supplier.order_unit` (`unit`/`pack`), pakninger på koblingen (`item_supplier.pack_qty/pack_name/pack_gtin`), PO-linjer i pakker (`packs`, `pack_price`, `supplier_sku`/`gtin` i stedet for `sku`), `match_supplier_lines` (faktura-forhåndsvisning). Spec §6.3.1 |
 | `migrations/0090_inv_catalog_adapter_storefront.sql` | `upsert_items_from_catalog()` fra nettbutikkens speil (felles for alle butikker) |
 | `migrations/0098_inv_month_close.sql` | v0.11.0 månedsslutt: `_stock_as_of(at)`, `month_close`/`month_close_line`, `close_month`, `close_due_months` (spec §6.8) |
+| `migrations/0099_inv_margin_landed_cost.sql` | v0.12.0: margin per salg — `v_sale_line_cost` (kost per ordrelinje), `v_sale_cost_source` (sporing til mottak/PO/leverandør), `v_consumption_source`, `v_sale_movement`, `_root_layer` (spec §6.9). Landed cost i ettertid — `landed_cost`/`landed_cost_line`, `create/preview/reverse_landed_cost`, `_apply_landed_delta`; `cogs_correction.reason/landed_cost_id`; `reverse_goods_receipt` nekter mottak med bokført landed cost; `record_sale_return` lagrer hvilket salg som returneres (spec §6.10) |
 | `scripts/install.mjs` | installerer i butikk: `--api`, `--migrations`, `--check`, `--dry-run`, `--force` |
 | `api/lib/inventory/config.example.js` | mal for butikkens `config.js` (NextAuth `getToken` / `getServerSession`) |
 | `api/lib/inventory/` | HTTP-laget: `db` (egen pool), `rpc` (inv.* → jsonb, feilmapping), `handler` (route-wrapper: auth, 405, Idempotency-Key, feil), `queries` (lister/keyset), `auth`, `errors` (kode→status + norsk brukertekst), `export` (**standarden for nedlasting**: csv/xlsx/pdf, standardkolonner) + `xlsx`/`pdf`/`csv` (skrivere), `client` (fetch-helper + `exportUrl` for UI), `config` (**butikk-spesifikk, overskrives ikke**) |
@@ -108,7 +109,7 @@ cd api && npm ci && npm test && npm run build
 - Offentlige funksjoner tar/returnerer `jsonb`. Interne har `_`-prefiks og typede args.
 - Feil: `inv._raise('<CODE>', 'tekst', '{detaljer}')` → `P0001`, message `CODE: tekst`,
   detail = json. Kodene og HTTP-mapping står i spec §6.0. Nye koder:
-  `ALREADY_REVERSED` (409).
+  `ALREADY_REVERSED` (409), `LANDED_COST_POSTED` (409, v0.12.0).
 - Alle skrivinger låser `inv.stock_balance` (item × location) `FOR UPDATE` før de leser
   beholdning — det er det som gjør `new_qty` trygt under samtidighet (T18).
 - `inv.movement` er append-only (trigger). Kun kostfelter, `reversed_by`, `metadata`
@@ -127,6 +128,14 @@ cd api && npm ci && npm test && npm run build
 `ref_line = <line_id>`, påfølgende `<line_id>:<seq>`, returer `<line_id>:r<seq>`, refusjoner
 `ref_type='woo_refund', ref_id=<refund_id>`. Restore-status returnerer `net`. Push-køen fylles av
 trigger på `inv.movement`; workeren claimer rader i 2 min (`list_stock_push_due`).
+
+## Kost endres etter salget (v0.12.0)
+
+`movement.unit_cost/total_cost` på et salg er alltid gjeldende kost: dekket estimat (§3.5) og landed cost fordelt i
+ettertid (§6.10) skrives tilbake, og hver endring logges i `inv.cogs_correction` (`reason`). Kode som endrer lagkost må
+gjøre som `_apply_landed_delta`: lås alle saldoer for varen, oppdater lag **og** konsumrader, regn bevegelsene om med
+samme avrunding som `_post_in`/`_post_out` (urundet sum → `total_cost` 2 des., `unit_cost` 4 des.), og oppdater
+`stock_balance.value`. Margin leses fra `inv.v_sale_line_cost` — ikke legg `cogs_correction` oppå.
 
 ## Avvik fra spec (bevisste)
 

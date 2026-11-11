@@ -1,4 +1,4 @@
-// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.12.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Error codes → HTTP status (spec §6.0) and Norwegian/English user-facing text for the UI.
 // Isomorphic: no server imports, safe in React.
@@ -16,6 +16,7 @@ export const STATUS_BY_CODE = {
   LAYER_CONSUMED: 409,
   PO_LOCKED: 409,
   ALREADY_REVERSED: 409,
+  LANDED_COST_POSTED: 409,
   RECONCILE_RUNNING: 409,
   IMMUTABLE: 409,
   INSUFFICIENT_STOCK: 422,
@@ -67,6 +68,7 @@ const TEXT = {
     OVER_RECEIPT: (d) => `Mer enn bestilt: ${d.sku || ''} bestilt ${Number(d.qty_ordered)}, mottatt ${Number(d.qty_received)}`,
     LAYER_CONSUMED: () => 'Varene fra denne bevegelsen er allerede solgt eller flyttet — lag en justering i stedet',
     ALREADY_REVERSED: () => 'Dette er allerede reversert',
+    LANDED_COST_POSTED: (d) => `Varemottaket har fordelt frakt/toll (${d.landed_costs || 'landed cost'}) — reverser den først`,
     PO_LOCKED: () => 'Innkjøpsordren er låst for endringer',
     PO_STATUS_INVALID: () => 'Ugyldig statusendring for innkjøpsordren',
     ITEM_NOT_FOUND: (d) => (d.supplier_sku || d.gtin) && !d.sku
@@ -86,6 +88,7 @@ const TEXT = {
     OVER_RECEIPT: (d) => `More than ordered: ${d.sku || ''} ordered ${Number(d.qty_ordered)}, already received ${Number(d.qty_received)}`,
     LAYER_CONSUMED: () => 'Stock from this movement has already been sold or moved — make an adjustment instead',
     ALREADY_REVERSED: () => 'This has already been reversed',
+    LANDED_COST_POSTED: (d) => `This receipt has landed cost allocated (${d.landed_costs || 'landed cost'}) — reverse that first`,
     PO_LOCKED: () => 'This purchase order is locked for changes',
     PO_STATUS_INVALID: () => 'That status change is not allowed for this purchase order',
     ITEM_NOT_FOUND: (d) => (d.supplier_sku || d.gtin) && !d.sku

@@ -1,9 +1,9 @@
-// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.12.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 import { route, requireParam } from '../../../../../lib/inventory/handler';
 import { getMovement } from '../../../../../lib/inventory/queries';
 import { InventoryError } from '../../../../../lib/inventory/errors';
 
-// GET /api/inventory/movements/:id → movement + consumptions + layers + cogs_corrections
+// GET /api/inventory/movements/:id → movement + consumptions + layers + cogs_corrections + cost_sources
 export default route({
   GET: async (req, res, { query }) => {
     const id = requireParam(query.id, 'id');

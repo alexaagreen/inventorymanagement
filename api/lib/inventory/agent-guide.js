@@ -1,11 +1,11 @@
-// inventory-ledger v0.11.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
+// inventory-ledger v0.12.0 — DO NOT EDIT in the shop repo; change upstream and re-install.
 //
 // Machine-readable guide for AI agents and scripts: GET /api/inventory/guide (JSON) or
 // GET /api/inventory/guide?format=md (Markdown). Also served at GET /api/inventory. Keep it short, concrete and in sync with the routes.
 
 export const GUIDE = {
   name: 'inventory-ledger API',
-  version: '0.11.0',
+  version: '0.12.0',
   guide: 'GET /api/inventory/guide (JSON) or /api/inventory/guide?format=md',
   about: 'FIFO stock ledger. The ledger is master for stock; WooCommerce is master for products. All amounts are NOK unless a currency is given. Quantities are in the units we stock and sell.',
   auth: {
@@ -36,12 +36,22 @@ export const GUIDE = {
     { method: 'GET', path: '/api/inventory/purchase-orders/:id', returns: 'one PO with lines (qty in units, packs × pack_qty when ordered in packs) and receipts' },
     { method: 'GET', path: '/api/inventory/valuation', returns: 'stock value' },
     { method: 'GET', path: '/api/inventory/reports/cogs', params: 'from, to', returns: 'cost of goods sold' },
+    { method: 'GET', path: '/api/inventory/reports/sale-costs', params: 'from, to (on sold_at), source, order_id, order_ids=1,2, sku, skus, location, estimated=1, changed_since, limit, cursor, format=csv|xlsx|pdf',
+      returns: 'cost per sold order line: source (woo_order | manual_sale), order_id, line_id (Woo line_item id), qty_sold, qty_returned, qty_net, cogs, unit_cogs, cost_estimated, last_cost_change_at + totals. Join your revenue lines on (source, order_id, line_id) to get margin; cogs is always the current cost (estimates and landed cost are written back)' },
+    { method: 'GET', path: '/api/inventory/reports/sale-sources', params: 'from, to, group_by=supplier|po|receipt|origin|sku, source, order_id, sku, skus, supplier_id, po_id, receipt_id, origin, location, limit, cursor, format=csv|xlsx|pdf',
+      returns: 'where the cost of what was sold came from: one row per sale × consumed FIFO layer with origin (purchase | opening_balance | adjustment | sale_return | estimated), receipt_number, po_number, supplier_name, po_currency, po_unit_cost, fx_rate, landed_cost_per_unit, days_in_stock — or summed per group_by (qty, cost, unit_cost, avg_days_in_stock, orders)' },
+    { method: 'GET', path: '/api/inventory/landed-costs', params: 'status=posted|reversed, receipt_id, po_id, from, to, q, limit, cursor, format=csv|xlsx|pdf', returns: 'freight/duty/fees allocated to goods receipts: amount, method, to_stock, to_cogs, to_other, receipts, po_numbers' },
+    { method: 'GET', path: '/api/inventory/landed-costs/:id', returns: 'one landed cost with lines per receipt line: unit_delta, unit_cost_before/after, qty_in_stock, qty_sold, to_stock, to_cogs' },
     { method: 'GET', path: '/api/inventory/month-close', returns: 'end-of-month reports: one row per closed month (total_qty, total_value, sku_count, delta_value vs the month before, backdated_movements) + missing months' },
     { method: 'GET', path: '/api/inventory/month-close/:period', params: 'period=YYYY-MM, by=sku|location, location, q, format=csv|xlsx|pdf',
       returns: 'qty and value per SKU frozen at the end of the month, with prev_qty/prev_value/delta vs the month before; older/newer for paging' },
     { method: 'GET', path: '/api/inventory/reports/stock-as-of', params: 'at=YYYY-MM-DD|ISO, by, location, q, format=csv|xlsx|pdf', returns: 'qty and FIFO value per SKU as at any point in time, rebuilt from the ledger (not frozen)' },
   ],
   write: [
+    { method: 'POST', path: '/api/inventory/landed-costs/preview', body: '{ amount, currency?, fx_rate?, method?: "value"|"qty"|"manual", receipts?: [id|number], po?: id|number, lines?: [{ receipt, sku, amount }] }', returns: 'no writes: the split per receipt line and how much goes to stock value (to_stock), COGS of units already sold (to_cogs) and write-offs (to_other)' },
+    { method: 'POST', path: '/api/inventory/landed-costs', body: '{ amount, currency?, fx_rate?, method?, description?, vendor?, invoice_ref?, occurred_at?, receipts?: [id|number], po?: id|number, lines?: [{ receipt, sku, amount }] }',
+      returns: 'allocates a freight/duty/fee invoice to goods receipts (default: by goods value). Raises the unit cost of what is in stock, corrects COGS of what is sold (cogs_correction reason landed_cost). Amount is ex. VAT. fx_rate is required when currency is not NOK' },
+    { method: 'POST', path: '/api/inventory/landed-costs/:id/reverse', body: '{ note? }', returns: 'takes the allocation out again' },
     { method: 'POST', path: '/api/inventory/month-close', body: '{ period: "YYYY-MM", recalculate?: true } | { all_missing: true }', returns: 'close a completed month (or every missing one); recalculate replaces a close and keeps the old totals in history' },
     { method: 'POST', path: '/api/inventory/suppliers/:supplier/match-lines', body: '{ lines: [{ supplier_sku?, gtin?, description?, qty, net_amount? }] }', returns: 'invoice preview (no writes): sku per line, units, unit cost, ready-made po_line; unmatched lines need a sku once' },
     { method: 'POST', path: '/api/inventory/purchase-orders', body: '{ supplier_id, supplier_ref?, lines: [{ sku, qty, unit_cost } | { sku|supplier_sku|gtin, packs, pack_qty?, pack_price }] }', returns: 'the PO (draft)' },
@@ -60,6 +70,10 @@ export const GUIDE = {
     { ask: 'What has happened to one product?', call: 'GET /api/inventory/items/LK-DRY-DSV/movements?from=2026-01-01' },
     { ask: 'Everything received from a supplier last month', call: 'GET /api/inventory/suppliers/<supplier>/movements?kind=innkjop&from=2026-09-01&to=2026-10-01' },
     { ask: 'What was the stock worth at the end of September?', call: 'GET /api/inventory/month-close/2026-09' },
+    { ask: 'What did order #5001 cost us, and where did the goods come from?', call: 'GET /api/inventory/reports/sale-costs?order_id=<woo order id>  then  GET /api/inventory/reports/sale-sources?order_id=<woo order id>' },
+    { ask: 'Which suppliers did last month\'s cost of sales come from?', call: 'GET /api/inventory/reports/sale-sources?group_by=supplier&from=2026-10-01&to=2026-11-01' },
+    { ask: 'Which order lines changed cost after they were sold (re-sync margin)?', call: 'GET /api/inventory/reports/sale-costs?changed_since=2026-11-01' },
+    { ask: 'Enter a freight or customs invoice for a shipment', call: '1) POST /landed-costs/preview { amount, po: "PO-00012" }  2) check to_stock/to_cogs  3) POST /landed-costs with the same body + description, vendor, invoice_ref' },
     { ask: 'Enter a supplier invoice', call: '1) GET /suppliers/<supplier> and follow rules[]  2) POST /suppliers/<supplier>/match-lines  3) POST /purchase-orders with the matched po_line[]s' },
   ],
 };
