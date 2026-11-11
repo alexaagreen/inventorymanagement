@@ -1,6 +1,6 @@
 -- inventory-ledger v0.12.0
 -- =============================================================================
--- 0099_inv_margin_landed_cost.sql — margin per sale (cost tracing) + landed cost allocation
+-- 0100_inv_margin_landed_cost.sql — margin per sale (cost tracing) + landed cost allocation
 -- =============================================================================
 -- Two things, both built on what the ledger already records (spec §6.9 and §6.10):
 --

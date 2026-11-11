@@ -658,7 +658,7 @@ POST /sync/month-close                    → cron: close_due_months (source=sch
 UI (per butikk): `/inventory/month-close` (liste over måneder, «Close missing months», lager per dato) og
 `/inventory/month-close/:period` (per SKU, ← → gjennom månedene, sammenligning med forrige måned, CSV, rekalkulering).
 
-### 6.9 Margin per salg — sporing salg ↔ innkjøp (v0.12.0, migrasjon 0099)
+### 6.9 Margin per salg — sporing salg ↔ innkjøp (v0.12.0, migrasjon 0100)
 
 **Mål.** For hver solgte ordrelinje skal vi kunne svare på: hva kostet akkurat disse enhetene, hvilket innkjøp
 (mottak, PO, leverandør, kurs) kom de fra, og hva ble marginen — og følge det over tid per SKU, leverandør og kampanje.
@@ -754,6 +754,11 @@ select l.wc_order_id, l.line_item_id, l.sku, l.name, o.date_created,
   left join inv.v_sale_line_cost c
          on c.source = 'woo_order' and c.order_id = l.wc_order_id::text and c.line_id = l.line_item_id::text;
 ```
+Viewet forutsetter at inntektstabellene ligger i **samme database** som `inv`. Ligger de et annet sted (Bark: `fin_rep_*` i
+intern-databasen, `inv` i nettbutikkens Supabase), gjøres joinen i applikasjonen: hent kostlinjene for ordrene fra
+`inv.v_sale_line_cost` (eller `GET /reports/sale-costs?order_ids=…`) og slå dem sammen med inntektslinjene på
+`(source, order_id, line_id)`.
+
 Regler butikken må følge:
 - **Inntekt og kost må være netto på samme måte.** `cogs` er netto etter returer; da må også refundert beløp trekkes fra
   inntekten (butikkens refusjonsdata), ellers blir marginen for høy på returnerte ordre.
@@ -778,7 +783,7 @@ Regler butikken må følge:
 - Trengs en materialisert variant (tabell oppdatert av trigger) for butikker med store volum? Viewene bruker indeksene
   `idx_consumption_movement`, `idx_layer_movement`, `idx_grl_movement` og `idx_layer_source`.
 
-### 6.10 Landed cost — frakt, toll og gebyr fordelt i ettertid (v0.12.0, migrasjon 0099)
+### 6.10 Landed cost — frakt, toll og gebyr fordelt i ettertid (v0.12.0, migrasjon 0100)
 
 Fraktfakturaen og tolldeklarasjonen kommer ofte uker etter varemottaket. En **landed cost** fordeler et slikt beløp på
 ett eller flere varemottak, og kosten følger enhetene dit de er *nå*:
